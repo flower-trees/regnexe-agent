@@ -16,6 +16,7 @@ package org.salt.heliosagent.core;
 
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
+import org.salt.heliosagent.core.event.AgentEventListener;
 import org.salt.heliosagent.core.llm.DefaultModelProvider;
 import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.llm.ModelSpec;
@@ -86,6 +87,10 @@ public class HeliosAgentBuilder {
         return new Builder(flowEngine, chainActor).withMaxRounds(maxRounds);
     }
 
+    public Builder withEventListener(AgentEventListener listener) {
+        return new Builder(flowEngine, chainActor).withEventListener(listener);
+    }
+
     // -------------------------------------------------------------------------
 
     public static class Builder {
@@ -101,6 +106,7 @@ public class HeliosAgentBuilder {
         private TaskStore taskStore;
         private ResultComposer resultComposer;
         private int maxRounds = DEFAULT_MAX_ROUNDS;
+        private AgentEventListener eventListener;
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -147,6 +153,11 @@ public class HeliosAgentBuilder {
             return this;
         }
 
+        public Builder withEventListener(AgentEventListener listener) {
+            this.eventListener = listener;
+            return this;
+        }
+
         public HeliosAgent build() {
             return new HeliosAgent(
                     flowEngine,
@@ -160,7 +171,8 @@ public class HeliosAgentBuilder {
                     marketplace,
                     taskStore,
                     resultComposer,
-                    maxRounds
+                    maxRounds,
+                    eventListener != null ? eventListener : AgentEventListener.NO_OP
             );
         }
     }

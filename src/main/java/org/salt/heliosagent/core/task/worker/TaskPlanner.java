@@ -20,6 +20,9 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.heliosagent.core.event.AgentEvent;
+import org.salt.heliosagent.core.event.AgentEventListener;
+import org.salt.heliosagent.core.event.EventType;
 import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.task.state.RoundRecord;
@@ -70,6 +73,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
         List<CapabilityCandidate> candidates = bus.getTransmit(ContextBusKeys.CANDIDATES);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
@@ -86,6 +90,8 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         currentRound(state).setPlan(plan);
         state.setUpdatedAt(System.currentTimeMillis());
 
+        listener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
+                "Selected: " + plan.getSelectedCapabilityIds() + " | " + plan.getNarrative()));
         log.debug("Round {}: plan produced, selected caps: {}",
                 state.getCurrentRound(), plan.getSelectedCapabilityIds());
         return null;

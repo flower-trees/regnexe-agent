@@ -19,6 +19,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.salt.heliosagent.core.common.enums.CapabilityType;
 import org.salt.heliosagent.core.common.enums.TaskStatus;
+import org.salt.heliosagent.core.event.ConsoleEventListener;
 import org.salt.heliosagent.core.llm.Vendor;
 import org.salt.heliosagent.core.market.SimpleMarketplace;
 import org.salt.heliosagent.core.market.plugin.CapabilityDescriptor;
@@ -98,6 +99,7 @@ public class WeatherForecastTest {
                 .withPluginMarket(marketplace)
                 .withTaskStore(new InMemoryTaskStore())
                 .withResultComposer(new DefaultResultComposer())
+                .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
                 .build();
 

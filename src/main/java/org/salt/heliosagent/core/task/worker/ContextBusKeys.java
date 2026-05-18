@@ -33,7 +33,8 @@ public final class ContextBusKeys {
     public static final String CHAIN_ACTOR   = "chainActor";
     public static final String LLM_PROVIDER  = "llmProvider";
     public static final String MARKETPLACE   = "marketplace";
-    public static final String DEFAULT_MODEL = "defaultModel";
+    public static final String DEFAULT_MODEL   = "defaultModel";
+    public static final String EVENT_LISTENER  = "eventListener";
 
     private ContextBusKeys() {}
 }

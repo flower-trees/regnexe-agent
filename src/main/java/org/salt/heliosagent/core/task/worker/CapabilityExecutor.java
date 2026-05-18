@@ -18,6 +18,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
 import org.salt.heliosagent.core.common.enums.ExecutionStatus;
+import org.salt.heliosagent.core.event.AgentEvent;
+import org.salt.heliosagent.core.event.AgentEventListener;
+import org.salt.heliosagent.core.event.EventType;
 import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.market.Marketplace;
@@ -50,6 +53,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
         Marketplace marketplace = bus.getTransmit(ContextBusKeys.MARKETPLACE);
 
         String narrative = bus.getTransmit(ContextBusKeys.PLAN_NARRATIVE);
@@ -59,9 +63,14 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         List<Tool> tools = resolveTools(marketplace, selectedCapIds);
 
+        int round = state.getCurrentRound();
+        String taskId = state.getTaskId();
         McpAgentExecutor executor = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
                 .tools(tools)
+                .onLlm(text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
+                .onToolCall(tc -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc)))
+                .onObservation(obs -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_RESULT, obs)))
                 .build();
 
         this.mcpAgentExecutor = executor;
@@ -72,13 +81,18 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             output.setFinalText(result.getText());
             output.setStatus(ExecutionStatus.SUCCESS);
             bus.putTransmit(ContextBusKeys.EXEC_TEXT, result.getText());
+            listener.onEvent(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
+                    "SUCCESS | " + result.getText()));
             log.debug("Round {}: execution succeeded", state.getCurrentRound());
         } catch (AgentStoppedException e) {
             output.setStatus(ExecutionStatus.STOPPED);
+            listener.onEvent(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "STOPPED"));
             log.debug("Round {}: execution stopped", state.getCurrentRound());
         } catch (Exception e) {
             output.setStatus(ExecutionStatus.FAILED);
             output.setFinalText(e.getMessage());
+            listener.onEvent(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
+                    "FAILED | " + e.getMessage()));
             log.warn("Round {}: execution failed: {}", state.getCurrentRound(), e.getMessage());
         } finally {
             this.mcpAgentExecutor = null;

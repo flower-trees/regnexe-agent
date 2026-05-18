@@ -18,6 +18,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
 import org.salt.function.flow.FlowInstance;
 import org.salt.heliosagent.core.common.enums.TaskStatus;
+import org.salt.heliosagent.core.event.AgentEvent;
+import org.salt.heliosagent.core.event.AgentEventListener;
+import org.salt.heliosagent.core.event.EventType;
 import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.market.Marketplace;
@@ -60,6 +63,7 @@ public class HeliosAgent {
     private final TaskStore taskStore;
     private final ResultComposer resultComposer;
     private final int maxRounds;
+    private final AgentEventListener eventListener;
 
     HeliosAgent(FlowEngine flowEngine,
                 ChainActor chainActor,
@@ -72,7 +76,8 @@ public class HeliosAgent {
                 Marketplace marketplace,
                 TaskStore taskStore,
                 ResultComposer resultComposer,
-                int maxRounds) {
+                int maxRounds,
+                AgentEventListener eventListener) {
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -85,6 +90,7 @@ public class HeliosAgent {
         this.taskStore = taskStore;
         this.resultComposer = resultComposer;
         this.maxRounds = maxRounds;
+        this.eventListener = eventListener;
     }
 
     public AgentResult execute(String goal) {
@@ -100,9 +106,13 @@ public class HeliosAgent {
             taskStore.save(state);
         }
 
+        eventListener.onEvent(AgentEvent.of(state.getTaskId(), 0, EventType.AGENT_STARTED,
+                "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds));
+
         Map<String, Object> transmitMap = new HashMap<>();
         transmitMap.put(ContextBusKeys.STATE, state);
         transmitMap.put(ContextBusKeys.CHAIN_ACTOR, chainActor);
+        transmitMap.put(ContextBusKeys.EVENT_LISTENER, eventListener);
         if (llmProvider != null) {
             transmitMap.put(ContextBusKeys.LLM_PROVIDER, llmProvider);
         }
@@ -138,6 +148,10 @@ public class HeliosAgent {
         if (taskStore != null) {
             taskStore.markFinished(state.getTaskId());
         }
+
+        eventListener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                EventType.AGENT_COMPLETED,
+                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()));
 
         return AgentResult.builder()
                 .taskId(state.getTaskId())

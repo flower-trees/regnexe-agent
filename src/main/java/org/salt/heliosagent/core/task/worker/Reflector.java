@@ -23,6 +23,9 @@ import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
 import org.salt.heliosagent.core.common.enums.ReflectionAction;
 import org.salt.heliosagent.core.common.enums.TaskStatus;
+import org.salt.heliosagent.core.event.AgentEvent;
+import org.salt.heliosagent.core.event.AgentEventListener;
+import org.salt.heliosagent.core.event.EventType;
 import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.task.state.RoundRecord;
@@ -83,6 +86,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
 
         String execText = bus.getTransmit(ContextBusKeys.EXEC_TEXT);
 
@@ -105,6 +109,9 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         }
         state.setUpdatedAt(System.currentTimeMillis());
 
+        listener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                EventType.REFLECTION_COMPLETED,
+                decision.getAction() + " — " + decision.getReason()));
         log.debug("Round {}: reflection = {}, reason = {}",
                 state.getCurrentRound(), decision.getAction(), decision.getReason());
         return null;

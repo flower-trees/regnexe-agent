@@ -17,6 +17,9 @@ package org.salt.heliosagent.core.task.worker;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.heliosagent.core.event.AgentEvent;
+import org.salt.heliosagent.core.event.AgentEventListener;
+import org.salt.heliosagent.core.event.EventType;
 import org.salt.heliosagent.core.market.Marketplace;
 import org.salt.heliosagent.core.task.state.RoundRecord;
 import org.salt.heliosagent.core.task.state.TaskExecutionState;
@@ -40,6 +43,7 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
         IContextBus bus = getContextBus();
         TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
         Marketplace marketplace = bus.getTransmit(ContextBusKeys.MARKETPLACE);
+        AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
 
         int roundNumber = state.getCurrentRound() + 1;
         state.setCurrentRound(roundNumber);
@@ -75,6 +79,10 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
             round.setSearchResultVersion(state.getSearchResults().size() - 1);
             bus.putTransmit(ContextBusKeys.CANDIDATES, result.getCandidates());
 
+            String names = result.getCandidates().stream()
+                    .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
+            listener.onEvent(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
+                    "Found " + result.getCandidates().size() + " capabilities: " + names));
             log.debug("Round {}: searched, found {} candidates",
                     roundNumber, result.getCandidates().size());
         } else {
@@ -86,6 +94,8 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
                     : List.of();
             bus.putTransmit(ContextBusKeys.CANDIDATES, lastCandidates);
 
+            listener.onEvent(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
+                    "Reusing cached capabilities (version " + lastVersion + ")"));
             log.debug("Round {}: skipped search, reusing version {}", roundNumber, lastVersion);
         }
 
