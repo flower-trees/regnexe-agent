@@ -67,6 +67,10 @@ public class HeliosAgentBuilder {
         return new Builder(flowEngine, chainActor).withResultComposer(composer);
     }
 
+    public Builder withDefaultModel(String modelName) {
+        return new Builder(flowEngine, chainActor).withDefaultModel(modelName);
+    }
+
     public Builder withMaxRounds(int maxRounds) {
         return new Builder(flowEngine, chainActor).withMaxRounds(maxRounds);
     }
@@ -81,6 +85,7 @@ public class HeliosAgentBuilder {
         private final ChainActor chainActor;
 
         private ModelProvider llmProvider;
+        private String defaultModel;
         private Marketplace marketplace;
         private TaskStore taskStore;
         private ResultComposer resultComposer;
@@ -93,6 +98,11 @@ public class HeliosAgentBuilder {
 
         public Builder withLlmProvider(ModelProvider provider) {
             this.llmProvider = provider;
+            return this;
+        }
+
+        public Builder withDefaultModel(String modelName) {
+            this.defaultModel = modelName;
             return this;
         }
 
@@ -125,6 +135,7 @@ public class HeliosAgentBuilder {
                     new CapabilityExecutor(),
                     new Reflector(),
                     llmProvider,
+                    defaultModel,
                     marketplace,
                     taskStore,
                     resultComposer,

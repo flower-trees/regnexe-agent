@@ -15,8 +15,23 @@
 package org.salt.heliosagent.core.task.worker;
 
 import lombok.extern.slf4j.Slf4j;
+import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.heliosagent.core.common.enums.ExecutionStatus;
+import org.salt.heliosagent.core.llm.ModelProvider;
+import org.salt.heliosagent.core.market.Marketplace;
+import org.salt.heliosagent.core.task.state.RoundRecord;
+import org.salt.heliosagent.core.task.state.TaskExecutionState;
+import org.salt.heliosagent.core.task.state.execution.ExecutionOutput;
+import org.salt.jlangchain.core.ChainActor;
+import org.salt.jlangchain.core.agent.AgentStoppedException;
 import org.salt.jlangchain.core.agent.McpAgentExecutor;
+import org.salt.jlangchain.core.llm.BaseChatModel;
+import org.salt.jlangchain.core.parser.generation.ChatGeneration;
+import org.salt.jlangchain.rag.tools.Tool;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Delegates plan execution to McpAgentExecutor.
@@ -29,8 +44,67 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
     @Override
     public Object process(Object input) {
-        // TODO
+        IContextBus bus = getContextBus();
+        TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
+        ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
+        ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
+        String modelName = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        Marketplace marketplace = bus.getTransmit(ContextBusKeys.MARKETPLACE);
+
+        String narrative = bus.getTransmit(ContextBusKeys.PLAN_NARRATIVE);
+        List<String> selectedCapIds = bus.getTransmit(ContextBusKeys.SELECTED_CAPS);
+
+        BaseChatModel llm = llmProvider.provide(modelName);
+
+        List<Tool> tools = resolveTools(marketplace, selectedCapIds);
+
+        McpAgentExecutor executor = McpAgentExecutor.builder(chainActor)
+                .llm(llm)
+                .tools(tools)
+                .build();
+
+        this.mcpAgentExecutor = executor;
+
+        ExecutionOutput output = new ExecutionOutput();
+        try {
+            ChatGeneration result = executor.invoke(narrative);
+            output.setFinalText(result.getText());
+            output.setStatus(ExecutionStatus.SUCCESS);
+            bus.putTransmit(ContextBusKeys.EXEC_TEXT, result.getText());
+            log.debug("Round {}: execution succeeded", state.getCurrentRound());
+        } catch (AgentStoppedException e) {
+            output.setStatus(ExecutionStatus.STOPPED);
+            log.debug("Round {}: execution stopped", state.getCurrentRound());
+        } catch (Exception e) {
+            output.setStatus(ExecutionStatus.FAILED);
+            output.setFinalText(e.getMessage());
+            log.warn("Round {}: execution failed: {}", state.getCurrentRound(), e.getMessage());
+        } finally {
+            this.mcpAgentExecutor = null;
+        }
+
+        currentRound(state).setExecutionResult(output);
+        state.setUpdatedAt(System.currentTimeMillis());
         return null;
+    }
+
+    private List<Tool> resolveTools(Marketplace marketplace, List<String> capIds) {
+        List<Tool> tools = new ArrayList<>();
+        if (marketplace == null || capIds == null) return tools;
+        for (String capId : capIds) {
+            Tool tool = marketplace.resolve(capId);
+            if (tool != null) {
+                tools.add(tool);
+            } else {
+                log.warn("Capability not resolved: {}", capId);
+            }
+        }
+        return tools;
+    }
+
+    private RoundRecord currentRound(TaskExecutionState state) {
+        List<RoundRecord> rounds = state.getRounds();
+        return rounds.get(rounds.size() - 1);
     }
 
     @Override

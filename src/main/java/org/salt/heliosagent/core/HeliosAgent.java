@@ -29,6 +29,7 @@ import org.salt.heliosagent.core.task.state.reflection.ReflectionDecision;
 import org.salt.heliosagent.core.task.store.TaskStore;
 import org.salt.heliosagent.core.task.worker.CapabilityExecutor;
 import org.salt.heliosagent.core.task.worker.CapabilitySearcher;
+import org.salt.heliosagent.core.task.worker.ContextBusKeys;
 import org.salt.heliosagent.core.task.worker.Reflector;
 import org.salt.heliosagent.core.task.worker.TaskPlanner;
 import org.salt.jlangchain.core.ChainActor;
@@ -46,11 +47,6 @@ import java.util.UUID;
 @Slf4j
 public class HeliosAgent {
 
-    static final String TRANSMIT_STATE = "state";
-    static final String TRANSMIT_LLM_PROVIDER = "llmProvider";
-    static final String TRANSMIT_MARKETPLACE = "marketplace";
-    static final String TRANSMIT_CHAIN_ACTOR = "chainActor";
-
     private final FlowEngine flowEngine;
     private final ChainActor chainActor;
     private final CapabilitySearcher capabilitySearcher;
@@ -58,6 +54,7 @@ public class HeliosAgent {
     private final CapabilityExecutor capabilityExecutor;
     private final Reflector reflector;
     private final ModelProvider llmProvider;
+    private final String defaultModel;
     private final Marketplace marketplace;
     private final TaskStore taskStore;
     private final ResultComposer resultComposer;
@@ -70,6 +67,7 @@ public class HeliosAgent {
                 CapabilityExecutor capabilityExecutor,
                 Reflector reflector,
                 ModelProvider llmProvider,
+                String defaultModel,
                 Marketplace marketplace,
                 TaskStore taskStore,
                 ResultComposer resultComposer,
@@ -81,6 +79,7 @@ public class HeliosAgent {
         this.capabilityExecutor = capabilityExecutor;
         this.reflector = reflector;
         this.llmProvider = llmProvider;
+        this.defaultModel = defaultModel;
         this.marketplace = marketplace;
         this.taskStore = taskStore;
         this.resultComposer = resultComposer;
@@ -101,13 +100,16 @@ public class HeliosAgent {
         }
 
         Map<String, Object> transmitMap = new HashMap<>();
-        transmitMap.put(TRANSMIT_STATE, state);
-        transmitMap.put(TRANSMIT_CHAIN_ACTOR, chainActor);
+        transmitMap.put(ContextBusKeys.STATE, state);
+        transmitMap.put(ContextBusKeys.CHAIN_ACTOR, chainActor);
         if (llmProvider != null) {
-            transmitMap.put(TRANSMIT_LLM_PROVIDER, llmProvider);
+            transmitMap.put(ContextBusKeys.LLM_PROVIDER, llmProvider);
+        }
+        if (defaultModel != null) {
+            transmitMap.put(ContextBusKeys.DEFAULT_MODEL, defaultModel);
         }
         if (marketplace != null) {
-            transmitMap.put(TRANSMIT_MARKETPLACE, marketplace);
+            transmitMap.put(ContextBusKeys.MARKETPLACE, marketplace);
         }
 
         FlowInstance flowInstance = flowEngine.builder()
