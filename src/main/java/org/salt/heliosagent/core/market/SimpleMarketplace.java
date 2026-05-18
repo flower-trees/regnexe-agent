@@ -28,19 +28,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * In-memory Marketplace for M0.
  * Install plugins manually; search returns all enabled capabilities.
- * Tool instances are registered separately via {@link #registerTool}.
+ * Each capability carries its own Tool — no separate registration needed.
  */
 @Slf4j
 public class SimpleMarketplace implements Marketplace {
 
     private final Map<String, PluginDescriptor> plugins = new LinkedHashMap<>();
     private final Set<String> enabled = new HashSet<>();
-    private final Map<String, Tool> toolRegistry = new ConcurrentHashMap<>();
 
     @Override
     public void install(PluginDescriptor plugin) {
@@ -53,10 +51,6 @@ public class SimpleMarketplace implements Marketplace {
     public void uninstall(String pluginId) {
         plugins.remove(pluginId);
         enabled.remove(pluginId);
-        if (plugins.get(pluginId) != null) {
-            plugins.get(pluginId).getCapabilities()
-                   .forEach(c -> toolRegistry.remove(c.getCapabilityId()));
-        }
     }
 
     @Override
@@ -103,7 +97,15 @@ public class SimpleMarketplace implements Marketplace {
 
     @Override
     public Tool resolve(String capabilityId) {
-        return toolRegistry.get(capabilityId);
+        for (PluginDescriptor plugin : plugins.values()) {
+            if (!enabled.contains(plugin.getPluginId())) continue;
+            for (CapabilityDescriptor cap : plugin.getCapabilities()) {
+                if (capabilityId.equals(cap.getCapabilityId())) {
+                    return cap.getTool();
+                }
+            }
+        }
+        return null;
     }
 
     @Override
@@ -111,13 +113,5 @@ public class SimpleMarketplace implements Marketplace {
         return plugins.values().stream()
                 .filter(p -> enabled.contains(p.getPluginId()))
                 .toList();
-    }
-
-    /**
-     * Registers the actual Tool instance for a capability.
-     * Called after {@link #install} to wire up the executable.
-     */
-    public void registerTool(String capabilityId, Tool tool) {
-        toolRegistry.put(capabilityId, tool);
     }
 }

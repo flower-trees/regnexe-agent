@@ -14,6 +14,7 @@
 
 package org.salt.heliosagent.core.market.plugin;
 
+import lombok.Builder;
 import lombok.Data;
 
 import java.util.List;
@@ -23,6 +24,7 @@ import java.util.Map;
  * Describes a plugin and the capabilities it registers into the Marketplace
  */
 @Data
+@Builder
 public class PluginDescriptor {
 
     private String pluginId;

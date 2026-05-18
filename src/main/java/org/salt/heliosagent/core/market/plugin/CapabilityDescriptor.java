@@ -14,16 +14,20 @@
 
 package org.salt.heliosagent.core.market.plugin;
 
+import lombok.Builder;
 import lombok.Data;
 import org.salt.heliosagent.core.common.enums.CapabilityType;
+import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.List;
 
 /**
  * Describes a single capability exposed by a plugin.
  * The description and tags are what Searcher and Planner see.
+ * The tool field is the executable backing this capability (MCP tool, Skill, SubAgent, etc.).
  */
 @Data
+@Builder
 public class CapabilityDescriptor {
 
     private String capabilityId;
@@ -34,16 +38,10 @@ public class CapabilityDescriptor {
 
     private String name;
 
-    /**
-     * Natural-language description for Searcher / Planner
-     */
     private String description;
 
     private List<String> tags;
 
-    /**
-     * Content of the capability's .md definition file (SKILL.md / AGENT.md).
-     * Used by Marketplace.resolve() to construct the Tool instance.
-     */
-    private String definitionMd;
+    /** The executable bound to this capability. */
+    private Tool tool;
 }

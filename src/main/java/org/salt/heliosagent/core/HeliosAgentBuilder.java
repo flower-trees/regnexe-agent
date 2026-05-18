@@ -16,6 +16,7 @@ package org.salt.heliosagent.core;
 
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
+import org.salt.heliosagent.core.llm.DefaultModelProvider;
 import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.market.Marketplace;
 import org.salt.heliosagent.core.task.ResultComposer;
@@ -134,7 +135,7 @@ public class HeliosAgentBuilder {
                     new TaskPlanner(),
                     new CapabilityExecutor(),
                     new Reflector(),
-                    llmProvider,
+                    llmProvider != null ? llmProvider : new DefaultModelProvider(),
                     defaultModel,
                     marketplace,
                     taskStore,
