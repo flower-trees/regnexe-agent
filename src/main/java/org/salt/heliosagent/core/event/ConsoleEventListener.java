@@ -22,15 +22,15 @@ public class ConsoleEventListener implements AgentEventListener {
     @Override
     public void onEvent(AgentEvent event) {
         String prefix = switch (event.getType()) {
-            case AGENT_STARTED        -> "[Agent  ]";
-            case SEARCH_COMPLETED     -> "[Search ]";
-            case PLAN_COMPLETED       -> "[Plan   ]";
-            case TOOL_CALLED          -> "[Call   ]";
-            case TOOL_RESULT          -> "[Result ]";
-            case LLM_RESPONDED        -> "[LLM    ]";
-            case EXECUTION_COMPLETED  -> "[Execute]";
-            case REFLECTION_COMPLETED -> "[Reflect]";
-            case AGENT_COMPLETED      -> "[Done   ]";
+            case AGENT_STARTED        -> "[Agent         ]";
+            case SEARCH_COMPLETED     -> "[Search        ]";
+            case PLAN_COMPLETED       -> "[Plan          ]";
+            case TOOL_CALLED          -> "[Execute Call  ]";
+            case TOOL_RESULT          -> "[Execute Result]";
+            case LLM_RESPONDED        -> "[Execute LLM   ]";
+            case EXECUTION_COMPLETED  -> "[Execute       ]";
+            case REFLECTION_COMPLETED -> "[Reflect       ]";
+            case AGENT_COMPLETED      -> "[Done          ]";
         };
         System.out.printf("%s R%d %s%n", prefix, event.getRound(), event.getText());
     }

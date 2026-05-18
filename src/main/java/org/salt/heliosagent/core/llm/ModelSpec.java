@@ -21,7 +21,7 @@ import lombok.Value;
  * When vendor is null, {@link DefaultModelProvider} routes by model-name prefix.
  *
  * <pre>
- * ModelSpec.of("qwen-plus")               // auto-route via prefix
+ * ModelSpec.of("deepseek-v4-flash")               // auto-route via prefix
  * ModelSpec.of("aliyun", "deepseek-v3")   // explicit vendor
  * </pre>
  */

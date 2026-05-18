@@ -22,7 +22,9 @@ import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.llm.Vendor;
 import org.salt.heliosagent.core.market.Marketplace;
+import org.salt.heliosagent.core.task.DefaultResultComposer;
 import org.salt.heliosagent.core.task.ResultComposer;
+import org.salt.heliosagent.core.task.store.InMemoryTaskStore;
 import org.salt.heliosagent.core.task.store.TaskStore;
 import org.salt.heliosagent.core.task.worker.CapabilityExecutor;
 import org.salt.heliosagent.core.task.worker.CapabilitySearcher;
@@ -169,8 +171,8 @@ public class HeliosAgentBuilder {
                     llmProvider != null ? llmProvider : new DefaultModelProvider(),
                     defaultModel,
                     marketplace,
-                    taskStore,
-                    resultComposer,
+                    taskStore != null ? taskStore : new InMemoryTaskStore(),
+                    resultComposer != null ? resultComposer : new DefaultResultComposer(),
                     maxRounds,
                     eventListener != null ? eventListener : AgentEventListener.NO_OP
             );

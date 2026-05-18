@@ -25,8 +25,6 @@ import org.salt.heliosagent.core.market.SimpleMarketplace;
 import org.salt.heliosagent.core.market.plugin.CapabilityDescriptor;
 import org.salt.heliosagent.core.market.plugin.PluginDescriptor;
 import org.salt.heliosagent.core.task.AgentResult;
-import org.salt.heliosagent.core.task.DefaultResultComposer;
-import org.salt.heliosagent.core.task.store.InMemoryTaskStore;
 import org.salt.jlangchain.rag.tools.Tool;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -95,10 +93,8 @@ public class WeatherForecastTest {
         // ── Agent ────────────────────────────────────────────────────────────
 
         HeliosAgent agent = heliosAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "qwen-plus")
+                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
-                .withTaskStore(new InMemoryTaskStore())
-                .withResultComposer(new DefaultResultComposer())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
                 .build();
