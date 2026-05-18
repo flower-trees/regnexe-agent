@@ -19,6 +19,7 @@ import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
 import org.salt.heliosagent.core.common.enums.ExecutionStatus;
 import org.salt.heliosagent.core.llm.ModelProvider;
+import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.market.Marketplace;
 import org.salt.heliosagent.core.task.state.RoundRecord;
 import org.salt.heliosagent.core.task.state.TaskExecutionState;
@@ -48,13 +49,13 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
-        String modelName = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
         Marketplace marketplace = bus.getTransmit(ContextBusKeys.MARKETPLACE);
 
         String narrative = bus.getTransmit(ContextBusKeys.PLAN_NARRATIVE);
         List<String> selectedCapIds = bus.getTransmit(ContextBusKeys.SELECTED_CAPS);
 
-        BaseChatModel llm = llmProvider.provide(modelName);
+        BaseChatModel llm = llmProvider.provide(modelSpec);
 
         List<Tool> tools = resolveTools(marketplace, selectedCapIds);
 

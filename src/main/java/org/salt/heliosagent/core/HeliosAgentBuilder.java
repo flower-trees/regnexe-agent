@@ -18,6 +18,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
 import org.salt.heliosagent.core.llm.DefaultModelProvider;
 import org.salt.heliosagent.core.llm.ModelProvider;
+import org.salt.heliosagent.core.llm.ModelSpec;
+import org.salt.heliosagent.core.llm.Vendor;
 import org.salt.heliosagent.core.market.Marketplace;
 import org.salt.heliosagent.core.task.ResultComposer;
 import org.salt.heliosagent.core.task.store.TaskStore;
@@ -68,8 +70,16 @@ public class HeliosAgentBuilder {
         return new Builder(flowEngine, chainActor).withResultComposer(composer);
     }
 
-    public Builder withDefaultModel(String modelName) {
-        return new Builder(flowEngine, chainActor).withDefaultModel(modelName);
+    public Builder withDefaultModel(String model) {
+        return new Builder(flowEngine, chainActor).withDefaultModel(model);
+    }
+
+    public Builder withDefaultModel(String vendor, String model) {
+        return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model);
+    }
+
+    public Builder withDefaultModel(Vendor vendor, String model) {
+        return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model);
     }
 
     public Builder withMaxRounds(int maxRounds) {
@@ -86,7 +96,7 @@ public class HeliosAgentBuilder {
         private final ChainActor chainActor;
 
         private ModelProvider llmProvider;
-        private String defaultModel;
+        private ModelSpec defaultModel;
         private Marketplace marketplace;
         private TaskStore taskStore;
         private ResultComposer resultComposer;
@@ -102,8 +112,18 @@ public class HeliosAgentBuilder {
             return this;
         }
 
-        public Builder withDefaultModel(String modelName) {
-            this.defaultModel = modelName;
+        public Builder withDefaultModel(String model) {
+            this.defaultModel = ModelSpec.of(model);
+            return this;
+        }
+
+        public Builder withDefaultModel(String vendor, String model) {
+            this.defaultModel = ModelSpec.of(vendor, model);
+            return this;
+        }
+
+        public Builder withDefaultModel(Vendor vendor, String model) {
+            this.defaultModel = ModelSpec.of(vendor, model);
             return this;
         }
 

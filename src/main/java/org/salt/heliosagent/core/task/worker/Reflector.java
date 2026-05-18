@@ -24,6 +24,7 @@ import org.salt.function.flow.node.FlowNode;
 import org.salt.heliosagent.core.common.enums.ReflectionAction;
 import org.salt.heliosagent.core.common.enums.TaskStatus;
 import org.salt.heliosagent.core.llm.ModelProvider;
+import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.task.state.RoundRecord;
 import org.salt.heliosagent.core.task.state.TaskExecutionState;
 import org.salt.heliosagent.core.task.state.reflection.ReflectionDecision;
@@ -81,11 +82,11 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
-        String modelName = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
 
         String execText = bus.getTransmit(ContextBusKeys.EXEC_TEXT);
 
-        BaseChatModel llm = llmProvider.provide(modelName);
+        BaseChatModel llm = llmProvider.provide(modelSpec);
         FlowInstance flow = buildFlow(chainActor, llm);
 
         String userPrompt = buildPrompt(state, execText);

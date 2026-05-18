@@ -19,6 +19,7 @@ import org.salt.function.flow.FlowEngine;
 import org.salt.function.flow.FlowInstance;
 import org.salt.heliosagent.core.common.enums.TaskStatus;
 import org.salt.heliosagent.core.llm.ModelProvider;
+import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.market.Marketplace;
 import org.salt.heliosagent.core.task.AgentResult;
 import org.salt.heliosagent.core.task.ResultComposer;
@@ -54,7 +55,7 @@ public class HeliosAgent {
     private final CapabilityExecutor capabilityExecutor;
     private final Reflector reflector;
     private final ModelProvider llmProvider;
-    private final String defaultModel;
+    private final ModelSpec defaultModel;
     private final Marketplace marketplace;
     private final TaskStore taskStore;
     private final ResultComposer resultComposer;
@@ -67,7 +68,7 @@ public class HeliosAgent {
                 CapabilityExecutor capabilityExecutor,
                 Reflector reflector,
                 ModelProvider llmProvider,
-                String defaultModel,
+                ModelSpec defaultModel,
                 Marketplace marketplace,
                 TaskStore taskStore,
                 ResultComposer resultComposer,

@@ -29,68 +29,93 @@ import org.salt.jlangchain.core.llm.stepfun.ChatStepfun;
 import org.salt.jlangchain.core.llm.zhipu.ChatZhipu;
 
 /**
- * Prefix-based ModelProvider that covers all vendors bundled in j-langchain.
+ * Routes a {@link ModelSpec} to the matching j-langchain Chat class.
  *
- * Routing rules (first match wins):
- *   qwen- / qwq-          → ChatAliyun
- *   deepseek-             → ChatDeepseek
- *   ep-                   → ChatDoubao  (endpoint-ID format)
- *   hunyuan-              → ChatHunyuan
- *   yi-                   → ChatLingyi
- *   MiniMax- / minimax-   → ChatMinimax
- *   moonshot-             → ChatMoonshot
- *   *:* (name:tag)        → ChatOllama
- *   gpt- / o1- / o3- / o4- → ChatOpenAI
- *   ernie-                → ChatQianfan
- *   step-                 → ChatStepfun
- *   glm-                  → ChatZhipu
+ * When {@link ModelSpec#getVendor()} is set, vendor takes priority (explicit routing).
+ * Otherwise falls back to model-name prefix matching:
+ *
+ *   qwen- / qwq-              → aliyun
+ *   deepseek-                 → deepseek
+ *   ep-                       → doubao  (endpoint-ID format)
+ *   hunyuan-                  → hunyuan
+ *   yi-                       → lingyi
+ *   MiniMax- / minimax-       → minimax
+ *   moonshot-                 → moonshot
+ *   name:tag (contains ':')   → ollama
+ *   gpt- / o1- / o3- / o4-   → openai
+ *   ernie-                    → qianfan
+ *   step-                     → stepfun
+ *   glm-                      → zhipu
  */
 public class DefaultModelProvider implements ModelProvider {
 
     @Override
-    public BaseChatModel provide(String modelName) {
-        if (modelName == null) {
-            throw new IllegalArgumentException("modelName must not be null");
+    public BaseChatModel provide(ModelSpec spec) {
+        if (spec == null || spec.getModel() == null) {
+            throw new IllegalArgumentException("ModelSpec and model must not be null");
         }
-        String m = modelName.toLowerCase();
+        if (spec.getVendor() != null) {
+            return byVendor(spec.getVendor(), spec.getModel());
+        }
+        return byPrefix(spec.getModel());
+    }
 
+    private BaseChatModel byVendor(String vendor, String model) {
+        return switch (vendor.toLowerCase()) {
+            case "aliyun"   -> ChatAliyun.builder().model(model).build();
+            case "deepseek" -> ChatDeepseek.builder().model(model).build();
+            case "doubao"   -> ChatDoubao.builder().model(model).build();
+            case "hunyuan"  -> ChatHunyuan.builder().model(model).build();
+            case "lingyi"   -> ChatLingyi.builder().model(model).build();
+            case "minimax"  -> ChatMinimax.builder().model(model).build();
+            case "moonshot" -> ChatMoonshot.builder().model(model).build();
+            case "ollama"   -> ChatOllama.builder().model(model).build();
+            case "openai"   -> ChatOpenAI.builder().model(model).build();
+            case "qianfan"  -> ChatQianfan.builder().model(model).build();
+            case "stepfun"  -> ChatStepfun.builder().model(model).build();
+            case "zhipu"    -> ChatZhipu.builder().model(model).build();
+            default -> throw new IllegalArgumentException("Unknown vendor: " + vendor);
+        };
+    }
+
+    private BaseChatModel byPrefix(String model) {
+        String m = model.toLowerCase();
         if (m.startsWith("qwen-") || m.startsWith("qwq-")) {
-            return ChatAliyun.builder().model(modelName).build();
+            return ChatAliyun.builder().model(model).build();
         }
         if (m.startsWith("deepseek-")) {
-            return ChatDeepseek.builder().model(modelName).build();
+            return ChatDeepseek.builder().model(model).build();
         }
         if (m.startsWith("ep-")) {
-            return ChatDoubao.builder().model(modelName).build();
+            return ChatDoubao.builder().model(model).build();
         }
         if (m.startsWith("hunyuan-")) {
-            return ChatHunyuan.builder().model(modelName).build();
+            return ChatHunyuan.builder().model(model).build();
         }
         if (m.startsWith("yi-")) {
-            return ChatLingyi.builder().model(modelName).build();
+            return ChatLingyi.builder().model(model).build();
         }
-        if (m.startsWith("minimax-") || modelName.startsWith("MiniMax-")) {
-            return ChatMinimax.builder().model(modelName).build();
+        if (m.startsWith("minimax-") || model.startsWith("MiniMax-")) {
+            return ChatMinimax.builder().model(model).build();
         }
         if (m.startsWith("moonshot-")) {
-            return ChatMoonshot.builder().model(modelName).build();
+            return ChatMoonshot.builder().model(model).build();
         }
-        if (modelName.contains(":")) {
-            return ChatOllama.builder().model(modelName).build();
+        if (model.contains(":")) {
+            return ChatOllama.builder().model(model).build();
         }
         if (m.startsWith("gpt-") || m.startsWith("o1-") || m.startsWith("o3-") || m.startsWith("o4-")) {
-            return ChatOpenAI.builder().model(modelName).build();
+            return ChatOpenAI.builder().model(model).build();
         }
         if (m.startsWith("ernie-")) {
-            return ChatQianfan.builder().model(modelName).build();
+            return ChatQianfan.builder().model(model).build();
         }
         if (m.startsWith("step-")) {
-            return ChatStepfun.builder().model(modelName).build();
+            return ChatStepfun.builder().model(model).build();
         }
         if (m.startsWith("glm-")) {
-            return ChatZhipu.builder().model(modelName).build();
+            return ChatZhipu.builder().model(model).build();
         }
-
-        throw new IllegalArgumentException("No vendor matched for model: " + modelName);
+        throw new IllegalArgumentException("No vendor matched for model: " + model);
     }
 }

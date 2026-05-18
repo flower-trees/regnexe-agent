@@ -14,14 +14,29 @@
 
 package org.salt.heliosagent.core.llm;
 
-import org.salt.jlangchain.core.llm.BaseChatModel;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 
 /**
- * Resolves a model name to a {@link BaseChatModel} instance.
- * Implementations may back this with a static registry, a remote config store,
- * or any dynamic routing strategy.
+ * Well-known vendor identifiers recognized by {@link DefaultModelProvider}.
+ * Pass the {@link #value()} string when calling a custom {@link ModelProvider}.
  */
-public interface ModelProvider {
+@Getter
+@RequiredArgsConstructor
+public enum Vendor {
 
-    BaseChatModel provide(ModelSpec spec);
+    ALIYUN("aliyun"),
+    DEEPSEEK("deepseek"),
+    DOUBAO("doubao"),
+    HUNYUAN("hunyuan"),
+    LINGYI("lingyi"),
+    MINIMAX("minimax"),
+    MOONSHOT("moonshot"),
+    OLLAMA("ollama"),
+    OPENAI("openai"),
+    QIANFAN("qianfan"),
+    STEPFUN("stepfun"),
+    ZHIPU("zhipu");
+
+    private final String value;
 }

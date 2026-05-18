@@ -19,6 +19,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.salt.heliosagent.core.common.enums.CapabilityType;
 import org.salt.heliosagent.core.common.enums.TaskStatus;
+import org.salt.heliosagent.core.llm.Vendor;
 import org.salt.heliosagent.core.market.SimpleMarketplace;
 import org.salt.heliosagent.core.market.plugin.CapabilityDescriptor;
 import org.salt.heliosagent.core.market.plugin.PluginDescriptor;
@@ -93,7 +94,7 @@ public class WeatherForecastTest {
         // ── Agent ────────────────────────────────────────────────────────────
 
         HeliosAgent agent = heliosAgentBuilder
-                .withDefaultModel("qwen-plus")
+                .withDefaultModel(Vendor.ALIYUN, "qwen-plus")
                 .withPluginMarket(marketplace)
                 .withTaskStore(new InMemoryTaskStore())
                 .withResultComposer(new DefaultResultComposer())
