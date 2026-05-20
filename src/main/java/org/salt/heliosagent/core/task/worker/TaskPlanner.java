@@ -30,6 +30,7 @@ import org.salt.heliosagent.core.task.state.TaskExecutionState;
 import org.salt.heliosagent.core.task.state.capability.CapabilityCandidate;
 import org.salt.heliosagent.core.task.state.plan.PlanOutput;
 import org.salt.heliosagent.core.task.state.reflection.ReflectionHint;
+import org.salt.heliosagent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.parser.StrOutputParser;
@@ -75,11 +76,13 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
         List<CapabilityCandidate> candidates = bus.getTransmit(ContextBusKeys.CANDIDATES);
+        String sessionSummary = bus.getTransmit(ContextBusKeys.SESSION_SUMMARY);
+        TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
         FlowInstance flow = buildFlow(chainActor, llm);
 
-        String userPrompt = buildPrompt(state, candidates);
+        String userPrompt = buildPrompt(state, candidates, sessionSummary);
         ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
 
         PlanOutput plan = parsePlan(result.getText());
@@ -94,6 +97,8 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 "Selected: " + plan.getSelectedCapabilityIds() + " | " + plan.getNarrative()));
         log.debug("Round {}: plan produced, selected caps: {}",
                 state.getCurrentRound(), plan.getSelectedCapabilityIds());
+
+        if (taskStore != null) taskStore.save(state);
         return null;
     }
 
@@ -108,9 +113,21 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 .build();
     }
 
-    private String buildPrompt(TaskExecutionState state, List<CapabilityCandidate> candidates) {
+    private String buildPrompt(TaskExecutionState state,
+                               List<CapabilityCandidate> candidates,
+                               String sessionSummary) {
         StringBuilder sb = new StringBuilder();
+
+        if (sessionSummary != null && !sessionSummary.isBlank()) {
+            sb.append("== Session history ==\n").append(sessionSummary).append("\n\n");
+        }
+
         sb.append("Goal: ").append(state.getRequest().getGoal()).append("\n\n");
+
+        String supplement = state.getRequest().getSupplementInput();
+        if (supplement != null && !supplement.isBlank()) {
+            sb.append("== User supplement ==\n").append(supplement).append("\n\n");
+        }
 
         sb.append("Available capabilities:\n");
         if (candidates != null) {

@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
 import org.salt.heliosagent.core.common.enums.ExecutionStatus;
+import org.salt.heliosagent.core.common.enums.TaskStatus;
 import org.salt.heliosagent.core.event.AgentEvent;
 import org.salt.heliosagent.core.event.AgentEventListener;
 import org.salt.heliosagent.core.event.EventType;
@@ -27,15 +28,18 @@ import org.salt.heliosagent.core.market.Marketplace;
 import org.salt.heliosagent.core.task.state.RoundRecord;
 import org.salt.heliosagent.core.task.state.TaskExecutionState;
 import org.salt.heliosagent.core.task.state.execution.ExecutionOutput;
+import org.salt.heliosagent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.agent.AgentStoppedException;
 import org.salt.jlangchain.core.agent.McpAgentExecutor;
+import org.salt.jlangchain.core.agent.memory.AgentContext;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
 import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Delegates plan execution to McpAgentExecutor.
@@ -58,9 +62,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         String narrative = bus.getTransmit(ContextBusKeys.PLAN_NARRATIVE);
         List<String> selectedCapIds = bus.getTransmit(ContextBusKeys.SELECTED_CAPS);
+        AtomicBoolean stopSignal = bus.getTransmit(ContextBusKeys.STOP_SIGNAL);
+        AgentContext agentContext = bus.getTransmit(ContextBusKeys.AGENT_CONTEXT);
+        TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
-
         List<Tool> tools = resolveTools(marketplace, selectedCapIds);
 
         int round = state.getCurrentRound();
@@ -68,6 +74,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         McpAgentExecutor executor = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
                 .tools(tools)
+                .context(agentContext)
                 .onLlm(text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
                 .onToolCall(tc -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc)))
                 .onObservation(obs -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_RESULT, obs)))
@@ -77,7 +84,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         ExecutionOutput output = new ExecutionOutput();
         try {
-            ChatGeneration result = executor.invoke(narrative);
+            ChatGeneration result = executor.invoke(narrative, stopSignal);
             output.setFinalText(result.getText());
             output.setStatus(ExecutionStatus.SUCCESS);
             bus.putTransmit(ContextBusKeys.EXEC_TEXT, result.getText());
@@ -86,8 +93,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             log.debug("Round {}: execution succeeded", state.getCurrentRound());
         } catch (AgentStoppedException e) {
             output.setStatus(ExecutionStatus.STOPPED);
-            listener.onEvent(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "STOPPED"));
-            log.debug("Round {}: execution stopped", state.getCurrentRound());
+            state.setStatus(TaskStatus.PAUSED);
+            listener.onEvent(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED"));
+            log.debug("Round {}: execution paused", state.getCurrentRound());
         } catch (Exception e) {
             output.setStatus(ExecutionStatus.FAILED);
             output.setFinalText(e.getMessage());
@@ -100,6 +108,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         currentRound(state).setExecutionResult(output);
         state.setUpdatedAt(System.currentTimeMillis());
+        if (taskStore != null) taskStore.save(state);
         return null;
     }
 

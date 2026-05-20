@@ -31,6 +31,7 @@ import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.task.state.RoundRecord;
 import org.salt.heliosagent.core.task.state.TaskExecutionState;
 import org.salt.heliosagent.core.task.state.reflection.ReflectionDecision;
+import org.salt.heliosagent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.parser.StrOutputParser;
@@ -87,6 +88,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
+        TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         String execText = bus.getTransmit(ContextBusKeys.EXEC_TEXT);
 
@@ -114,6 +116,8 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
                 decision.getAction() + " — " + decision.getReason()));
         log.debug("Round {}: reflection = {}, reason = {}",
                 state.getCurrentRound(), decision.getAction(), decision.getReason());
+
+        if (taskStore != null) taskStore.save(state);
         return null;
     }
 

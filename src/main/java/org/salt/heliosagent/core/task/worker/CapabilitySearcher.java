@@ -26,6 +26,7 @@ import org.salt.heliosagent.core.task.state.TaskExecutionState;
 import org.salt.heliosagent.core.task.state.capability.CapabilitySearchResult;
 import org.salt.heliosagent.core.task.state.capability.SearchQuery;
 import org.salt.heliosagent.core.task.state.reflection.ReflectionHint;
+import org.salt.heliosagent.core.task.store.TaskStore;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -100,6 +101,9 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
         }
 
         state.setUpdatedAt(System.currentTimeMillis());
+
+        TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
+        if (taskStore != null) taskStore.save(state);
         return null;
     }
 

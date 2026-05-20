@@ -31,6 +31,10 @@ import org.salt.heliosagent.core.task.worker.CapabilitySearcher;
 import org.salt.heliosagent.core.task.worker.Reflector;
 import org.salt.heliosagent.core.task.worker.TaskPlanner;
 import org.salt.jlangchain.core.ChainActor;
+import org.salt.jlangchain.core.agent.memory.AgentContext;
+import org.salt.jlangchain.core.agent.memory.FullContext;
+import org.salt.jlangchain.core.history.storage.ConversationStorage;
+import org.salt.jlangchain.core.history.storage.InMemoryConversationStorage;
 import org.springframework.stereotype.Component;
 
 /**
@@ -93,6 +97,18 @@ public class HeliosAgentBuilder {
         return new Builder(flowEngine, chainActor).withEventListener(listener);
     }
 
+    public Builder withSessionStorage(ConversationStorage storage) {
+        return new Builder(flowEngine, chainActor).withSessionStorage(storage);
+    }
+
+    public Builder withSessionBufferSize(int maxSize) {
+        return new Builder(flowEngine, chainActor).withSessionBufferSize(maxSize);
+    }
+
+    public Builder withAgentContext(AgentContext context) {
+        return new Builder(flowEngine, chainActor).withAgentContext(context);
+    }
+
     // -------------------------------------------------------------------------
 
     public static class Builder {
@@ -109,6 +125,9 @@ public class HeliosAgentBuilder {
         private ResultComposer resultComposer;
         private int maxRounds = DEFAULT_MAX_ROUNDS;
         private AgentEventListener eventListener;
+        private ConversationStorage sessionStorage;
+        private int sessionBufferSize = 10;
+        private AgentContext agentContext;
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -160,6 +179,21 @@ public class HeliosAgentBuilder {
             return this;
         }
 
+        public Builder withSessionStorage(ConversationStorage storage) {
+            this.sessionStorage = storage;
+            return this;
+        }
+
+        public Builder withSessionBufferSize(int maxSize) {
+            this.sessionBufferSize = maxSize;
+            return this;
+        }
+
+        public Builder withAgentContext(AgentContext context) {
+            this.agentContext = context;
+            return this;
+        }
+
         public HeliosAgent build() {
             return new HeliosAgent(
                     flowEngine,
@@ -174,7 +208,10 @@ public class HeliosAgentBuilder {
                     taskStore != null ? taskStore : new InMemoryTaskStore(),
                     resultComposer != null ? resultComposer : new DefaultResultComposer(),
                     maxRounds,
-                    eventListener != null ? eventListener : AgentEventListener.NO_OP
+                    eventListener != null ? eventListener : AgentEventListener.NO_OP,
+                    sessionStorage != null ? sessionStorage : new InMemoryConversationStorage(),
+                    sessionBufferSize,
+                    agentContext != null ? agentContext : FullContext.build()
             );
         }
     }

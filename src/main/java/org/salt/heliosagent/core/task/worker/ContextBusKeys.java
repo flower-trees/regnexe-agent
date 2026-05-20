@@ -29,12 +29,16 @@ public final class ContextBusKeys {
 
     // --- TransmitMap keys: cross-round, set by HeliosAgent before the loop starts ---
 
-    public static final String STATE         = "state";
-    public static final String CHAIN_ACTOR   = "chainActor";
-    public static final String LLM_PROVIDER  = "llmProvider";
-    public static final String MARKETPLACE   = "marketplace";
-    public static final String DEFAULT_MODEL   = "defaultModel";
-    public static final String EVENT_LISTENER  = "eventListener";
+    public static final String STATE          = "state";
+    public static final String CHAIN_ACTOR    = "chainActor";
+    public static final String LLM_PROVIDER   = "llmProvider";
+    public static final String MARKETPLACE    = "marketplace";
+    public static final String DEFAULT_MODEL  = "defaultModel";
+    public static final String EVENT_LISTENER = "eventListener";
+    public static final String STOP_SIGNAL    = "stopSignal";
+    public static final String TASK_STORE     = "taskStore";
+    public static final String SESSION_SUMMARY = "sessionSummary";
+    public static final String AGENT_CONTEXT  = "agentContext";
 
     private ContextBusKeys() {}
 }

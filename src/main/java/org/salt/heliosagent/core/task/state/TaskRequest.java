@@ -43,4 +43,11 @@ public class TaskRequest {
      * Session identifier, for auditing
      */
     private String sessionId;
+
+    /**
+     * Additional context supplied by the user when resuming a paused task.
+     * Injected into the Planner prompt as a separate section so the LLM can
+     * distinguish it from the original goal.
+     */
+    private String supplementInput;
 }
