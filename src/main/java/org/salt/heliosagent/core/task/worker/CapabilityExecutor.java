@@ -25,6 +25,7 @@ import org.salt.heliosagent.core.event.EventType;
 import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.market.Marketplace;
+import org.salt.heliosagent.core.market.plugin.CapabilityDescriptor;
 import org.salt.heliosagent.core.task.state.RoundRecord;
 import org.salt.heliosagent.core.task.state.TaskExecutionState;
 import org.salt.heliosagent.core.task.state.execution.ExecutionOutput;
@@ -35,6 +36,8 @@ import org.salt.jlangchain.core.agent.McpAgentExecutor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
+import org.salt.jlangchain.core.skill.Skill;
+import org.salt.jlangchain.core.subagent.SubAgent;
 import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.ArrayList;
@@ -67,7 +70,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
-        List<Tool> tools = resolveTools(marketplace, selectedCapIds);
+        List<Tool> tools = resolveTools(marketplace, selectedCapIds, chainActor, llm);
 
         int round = state.getCurrentRound();
         String taskId = state.getTaskId();
@@ -112,18 +115,30 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         return null;
     }
 
-    private List<Tool> resolveTools(Marketplace marketplace, List<String> capIds) {
+    private List<Tool> resolveTools(Marketplace marketplace, List<String> capIds,
+                                    ChainActor chainActor, BaseChatModel llm) {
         List<Tool> tools = new ArrayList<>();
         if (marketplace == null || capIds == null) return tools;
         for (String capId : capIds) {
-            Tool tool = marketplace.resolve(capId);
+            CapabilityDescriptor cap = marketplace.resolveDescriptor(capId);
+            if (cap == null) {
+                log.warn("Capability not found: {}", capId);
+                continue;
+            }
+            Tool tool = buildTool(cap, chainActor, llm);
             if (tool != null) {
                 tools.add(tool);
-            } else {
-                log.warn("Capability not resolved: {}", capId);
             }
         }
         return tools;
+    }
+
+    private Tool buildTool(CapabilityDescriptor cap, ChainActor chainActor, BaseChatModel llm) {
+        return switch (cap.getType()) {
+            case MCP_TOOL  -> cap.getTool();
+            case SKILL     -> Skill.from(cap.getSkillConfig(), chainActor).llm(llm).build().asTool();
+            case SUB_AGENT -> SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm).build().asTool();
+        };
     }
 
     private RoundRecord currentRound(TaskExecutionState state) {

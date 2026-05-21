@@ -15,20 +15,27 @@
 package org.salt.heliosagent.core.market;
 
 /**
- * Loads plugins from local sources (annotation scan, directory) and
- * registers them into the Marketplace via {@link Marketplace#install}.
- * Not needed when the Marketplace is backed by a DB, ES, or vector store —
- * those cases manage descriptors directly through Marketplace.
+ * Discovers plugins from local sources (annotation scan, directory) and installs
+ * them into a {@link Marketplace}.
+ *
+ * <p>Typical usage:
+ * <pre>
+ * DefaultPluginManager manager = new DefaultPluginManager()
+ *     .addDirectory("/opt/helios-plugins")
+ *     .scanPackages("com.example.plugins")
+ *     .register(weatherBean);
+ *
+ * marketplace.load(manager);   // triggers installTo(marketplace)
+ * </pre>
  */
 public interface PluginManager {
 
-    /**
-     * Scan the given base packages for @Plugin annotated classes and register them
-     */
+    /** Accumulate a base directory path for directory-based plugin loading. */
+    void loadFromDirectory(String directoryPath);
+
+    /** Accumulate base packages for {@code @Plugin}-annotated class scanning. */
     void scanPackages(String... basePackages);
 
-    /**
-     * Load plugin descriptors from the given directory and register them
-     */
-    void loadFromDirectory(String directoryPath);
+    /** Execute discovery and install all found plugins into {@code marketplace}. */
+    void installTo(Marketplace marketplace);
 }

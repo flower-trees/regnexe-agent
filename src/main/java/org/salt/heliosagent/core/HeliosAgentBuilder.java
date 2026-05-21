@@ -22,6 +22,7 @@ import org.salt.heliosagent.core.llm.ModelProvider;
 import org.salt.heliosagent.core.llm.ModelSpec;
 import org.salt.heliosagent.core.llm.Vendor;
 import org.salt.heliosagent.core.market.Marketplace;
+import org.salt.heliosagent.core.market.SimpleMarketplace;
 import org.salt.heliosagent.core.task.DefaultResultComposer;
 import org.salt.heliosagent.core.task.ResultComposer;
 import org.salt.heliosagent.core.task.store.InMemoryTaskStore;
@@ -195,6 +196,9 @@ public class HeliosAgentBuilder {
         }
 
         public HeliosAgent build() {
+            ModelProvider resolvedProvider = llmProvider != null ? llmProvider : new DefaultModelProvider();
+            Marketplace resolvedMarketplace = marketplace != null ? marketplace : new SimpleMarketplace();
+
             return new HeliosAgent(
                     flowEngine,
                     chainActor,
@@ -202,9 +206,9 @@ public class HeliosAgentBuilder {
                     new TaskPlanner(),
                     new CapabilityExecutor(),
                     new Reflector(),
-                    llmProvider != null ? llmProvider : new DefaultModelProvider(),
+                    resolvedProvider,
                     defaultModel,
-                    marketplace,
+                    resolvedMarketplace,
                     taskStore != null ? taskStore : new InMemoryTaskStore(),
                     resultComposer != null ? resultComposer : new DefaultResultComposer(),
                     maxRounds,

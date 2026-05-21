@@ -17,6 +17,8 @@ package org.salt.heliosagent.core.market.plugin;
 import lombok.Builder;
 import lombok.Data;
 import org.salt.heliosagent.core.common.enums.CapabilityType;
+import org.salt.jlangchain.core.skill.SkillConfig;
+import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.List;
@@ -24,7 +26,15 @@ import java.util.List;
 /**
  * Describes a single capability exposed by a plugin.
  * The description and tags are what Searcher and Planner see.
- * The tool field is the executable backing this capability (MCP tool, Skill, SubAgent, etc.).
+ *
+ * <p>Exactly one backing field is set based on {@link #type}:
+ * <ul>
+ *   <li>{@code MCP_TOOL}  → {@link #tool} is set (pre-built, ready to invoke)</li>
+ *   <li>{@code SKILL}     → {@link #skillConfig} is set (built into a Tool at execution time)</li>
+ *   <li>{@code SUB_AGENT} → {@link #subAgentConfig} is set (built into a Tool at execution time)</li>
+ * </ul>
+ * Lazy instantiation of Skill / SubAgent keeps {@link org.salt.heliosagent.core.market.PluginManager}
+ * free of LLM dependencies at load time.
  */
 @Data
 @Builder
@@ -42,6 +52,12 @@ public class CapabilityDescriptor {
 
     private List<String> tags;
 
-    /** The executable bound to this capability. */
+    /** Set for MCP_TOOL: pre-built, invoked directly. */
     private Tool tool;
+
+    /** Set for SKILL: built into a Tool by CapabilityExecutor at execution time. */
+    private SkillConfig skillConfig;
+
+    /** Set for SUB_AGENT: built into a Tool by CapabilityExecutor at execution time. */
+    private SubAgentConfig subAgentConfig;
 }

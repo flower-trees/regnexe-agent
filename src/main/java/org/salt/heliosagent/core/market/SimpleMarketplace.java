@@ -20,7 +20,6 @@ import org.salt.heliosagent.core.market.plugin.PluginDescriptor;
 import org.salt.heliosagent.core.task.state.capability.CapabilityCandidate;
 import org.salt.heliosagent.core.task.state.capability.CapabilitySearchResult;
 import org.salt.heliosagent.core.task.state.capability.SearchQuery;
-import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -96,12 +95,12 @@ public class SimpleMarketplace implements Marketplace {
     }
 
     @Override
-    public Tool resolve(String capabilityId) {
+    public CapabilityDescriptor resolveDescriptor(String capabilityId) {
         for (PluginDescriptor plugin : plugins.values()) {
             if (!enabled.contains(plugin.getPluginId())) continue;
             for (CapabilityDescriptor cap : plugin.getCapabilities()) {
                 if (capabilityId.equals(cap.getCapabilityId())) {
-                    return cap.getTool();
+                    return cap;
                 }
             }
         }

@@ -14,6 +14,7 @@
 
 package org.salt.heliosagent.core.market;
 
+import org.salt.heliosagent.core.market.plugin.CapabilityDescriptor;
 import org.salt.heliosagent.core.market.plugin.PluginDescriptor;
 import org.salt.heliosagent.core.task.state.capability.CapabilitySearchResult;
 import org.salt.heliosagent.core.task.state.capability.SearchQuery;
@@ -34,15 +35,28 @@ public interface Marketplace {
 
     void disable(String pluginId);
 
-    /**
-     * Called by Searcher to retrieve Top-K capability candidates
-     */
+    /** Called by Searcher to retrieve capability candidates. */
     CapabilitySearchResult search(SearchQuery query);
 
     /**
-     * Called by Executor to resolve a capabilityId to its tool/skill instance
+     * Called by Executor to resolve a capabilityId to its full descriptor.
+     * CapabilityExecutor converts the descriptor to a Tool based on its type.
      */
-    Tool resolve(String capabilityId);
+    CapabilityDescriptor resolveDescriptor(String capabilityId);
+
+    /**
+     * Convenience: resolve directly to a Tool. Only works for MCP_TOOL descriptors
+     * (where the tool is pre-built). For SKILL / SUB_AGENT use resolveDescriptor.
+     */
+    default Tool resolve(String capabilityId) {
+        CapabilityDescriptor cap = resolveDescriptor(capabilityId);
+        return cap != null ? cap.getTool() : null;
+    }
+
+    /** Trigger a PluginManager to discover and install all its plugins into this marketplace. */
+    default void load(PluginManager manager) {
+        manager.installTo(this);
+    }
 
     List<PluginDescriptor> listEnabled();
 }
