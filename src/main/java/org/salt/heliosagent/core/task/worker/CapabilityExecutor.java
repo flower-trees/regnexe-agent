@@ -136,8 +136,14 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     private Tool buildTool(CapabilityDescriptor cap, ChainActor chainActor, BaseChatModel llm) {
         return switch (cap.getType()) {
             case MCP_TOOL  -> cap.getTool();
-            case SKILL     -> Skill.from(cap.getSkillConfig(), chainActor).llm(llm).build().asTool();
-            case SUB_AGENT -> SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm).build().asTool();
+            // If skillConfig is set (file-based plugin), build at execution time.
+            // If tool is set (programmatically pre-built), use it directly.
+            case SKILL     -> cap.getSkillConfig() != null
+                    ? Skill.from(cap.getSkillConfig(), chainActor).llm(llm).build().asTool()
+                    : cap.getTool();
+            case SUB_AGENT -> cap.getSubAgentConfig() != null
+                    ? SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm).build().asTool()
+                    : cap.getTool();
         };
     }
 
