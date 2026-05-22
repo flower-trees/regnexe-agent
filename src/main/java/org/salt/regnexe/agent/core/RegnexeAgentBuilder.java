@@ -21,6 +21,7 @@ import org.salt.regnexe.agent.core.llm.DefaultModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.llm.Vendor;
+import org.salt.regnexe.agent.core.market.DefaultPluginManager;
 import org.salt.regnexe.agent.core.market.Marketplace;
 import org.salt.regnexe.agent.core.market.SimpleMarketplace;
 import org.salt.regnexe.agent.core.task.DefaultResultComposer;
@@ -110,6 +111,21 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withAgentContext(context);
     }
 
+    /** Convenience: register one or more {@code @Plugin} beans without constructing a marketplace manually. */
+    public Builder withPlugin(Object... pluginBeans) {
+        return new Builder(flowEngine, chainActor).withPlugin(pluginBeans);
+    }
+
+    /** Convenience: scan packages for {@code @Plugin} classes without constructing a marketplace manually. */
+    public Builder withScanPackages(String... basePackages) {
+        return new Builder(flowEngine, chainActor).withScanPackages(basePackages);
+    }
+
+    /** Convenience: load plugins from file-system directories without constructing a marketplace manually. */
+    public Builder withDirectory(String... dirs) {
+        return new Builder(flowEngine, chainActor).withDirectory(dirs);
+    }
+
     // -------------------------------------------------------------------------
 
     public static class Builder {
@@ -192,6 +208,43 @@ public class RegnexeAgentBuilder {
 
         public Builder withAgentContext(AgentContext context) {
             this.agentContext = context;
+            return this;
+        }
+
+        /** Convenience: register one or more {@code @Plugin} beans without constructing a marketplace manually. */
+        public Builder withPlugin(Object... pluginBeans) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (Object bean : pluginBeans) {
+                mgr.register(bean);
+            }
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /** Convenience: scan packages for {@code @Plugin} classes without constructing a marketplace manually. */
+        public Builder withScanPackages(String... basePackages) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            mgr.scanPackages(basePackages);
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /** Convenience: load plugins from file-system directories without constructing a marketplace manually. */
+        public Builder withDirectory(String... dirs) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (String dir : dirs) {
+                mgr.addDirectory(dir);
+            }
+            this.marketplace.load(mgr);
             return this;
         }
 

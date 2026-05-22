@@ -261,6 +261,59 @@ public class PluginLoadingTest {
         }
     }
 
+    // ── Test 8: builder.withScanPackages() shortcut → full agent run ──────────
+
+    @Test
+    public void builderWithScanPackagesShouldRunAgent() {
+        RegnexeAgent agent = regnexeAgentBuilder
+                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withScanPackages("org.salt.regnexe.agent.core.testplugins")
+                .withEventListener(new ConsoleEventListener())
+                .withMaxRounds(3)
+                .build();
+
+        AgentResult result = agent.execute("查询北京今天的天气，告诉我是否适合户外跑步");
+
+        System.out.println("\n========== withScanPackages() Agent Result ==========");
+        System.out.println("Status : " + result.getStatus());
+        System.out.println("Rounds : " + result.getState().getCurrentRound());
+        System.out.println("Answer :\n" + result.getFinalText());
+        System.out.println("=====================================================\n");
+
+        Assert.assertEquals(TaskStatus.FINISHED, result.getStatus());
+        Assert.assertNotNull(result.getFinalText());
+        Assert.assertFalse(result.getFinalText().isBlank());
+    }
+
+    // ── Test 9: builder.withDirectory() shortcut → full agent run ────────────
+
+    @Test
+    public void builderWithDirectoryShouldRunAgent() throws IOException {
+        Path baseDir = buildTempPluginDir(false, false);
+        try {
+            RegnexeAgent agent = regnexeAgentBuilder
+                    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                    .withDirectory(baseDir.toString())
+                    .withEventListener(new ConsoleEventListener())
+                    .withMaxRounds(3)
+                    .build();
+
+            AgentResult result = agent.execute("查询北京今天的天气，告诉我是否适合户外跑步");
+
+            System.out.println("\n========== withDirectory() Agent Result ==========");
+            System.out.println("Status : " + result.getStatus());
+            System.out.println("Rounds : " + result.getState().getCurrentRound());
+            System.out.println("Answer :\n" + result.getFinalText());
+            System.out.println("==================================================\n");
+
+            Assert.assertEquals(TaskStatus.FINISHED, result.getStatus());
+            Assert.assertNotNull(result.getFinalText());
+            Assert.assertFalse(result.getFinalText().isBlank());
+        } finally {
+            deleteTree(baseDir);
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /**
