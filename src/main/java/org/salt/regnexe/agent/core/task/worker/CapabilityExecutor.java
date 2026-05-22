@@ -81,6 +81,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .onLlm(text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
                 .onToolCall(tc -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc)))
                 .onObservation(obs -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_RESULT, obs)))
+                .onTokenUsage(u -> listener.onEvent(AgentEvent.ofTokenUsage(taskId, round, u)))
                 .build();
 
         this.mcpAgentExecutor = executor;

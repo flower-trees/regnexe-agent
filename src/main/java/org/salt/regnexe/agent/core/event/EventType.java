@@ -27,5 +27,6 @@ public enum EventType {
     // Inner loop — emitted by McpAgentExecutor hooks
     LLM_RESPONDED,
     TOOL_CALLED,
-    TOOL_RESULT
+    TOOL_RESULT,
+    TOKEN_USAGE
 }

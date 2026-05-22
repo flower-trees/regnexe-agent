@@ -163,16 +163,20 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
     }
 
     private PlanOutput parsePlan(String text) {
+        String json = extractJson(text);
         try {
-            String json = extractJson(text);
             return MAPPER.readValue(json, PlanOutput.class);
-        } catch (Exception e) {
-            log.warn("Failed to parse PlanOutput, using raw text as narrative: {}", e.getMessage());
-            PlanOutput fallback = new PlanOutput();
-            fallback.setNarrative(text);
-            fallback.setSelectedCapabilityIds(List.of());
-            fallback.setReasoning("parse error");
-            return fallback;
+        } catch (Exception first) {
+            try {
+                return MAPPER.readValue(repairJson(json), PlanOutput.class);
+            } catch (Exception e) {
+                log.warn("Failed to parse PlanOutput, using raw text as narrative: {}", first.getMessage());
+                PlanOutput fallback = new PlanOutput();
+                fallback.setNarrative(text);
+                fallback.setSelectedCapabilityIds(List.of());
+                fallback.setReasoning("parse error");
+                return fallback;
+            }
         }
     }
 
@@ -183,6 +187,51 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             return text.substring(start, end + 1);
         }
         return text;
+    }
+
+    /**
+     * Escapes unescaped double-quotes inside JSON string values.
+     * Heuristic: a '"' that is NOT followed (after optional whitespace) by a JSON
+     * structural character (':', ',', '}', ']') while we are inside a string is an
+     * unescaped quote that the LLM forgot to escape.
+     */
+    private String repairJson(String json) {
+        StringBuilder sb = new StringBuilder(json.length() + 16);
+        boolean inString = false;
+        boolean escaped  = false;
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (escaped) {
+                sb.append(c);
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                sb.append(c);
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                if (!inString) {
+                    inString = true;
+                    sb.append(c);
+                } else {
+                    // Look ahead past whitespace to see if this is a valid terminator
+                    int j = i + 1;
+                    while (j < json.length() && json.charAt(j) == ' ') j++;
+                    char next = j < json.length() ? json.charAt(j) : 0;
+                    if (next == ':' || next == ',' || next == '}' || next == ']' || next == '\n' || next == '\r' || next == 0) {
+                        inString = false;
+                        sb.append(c);
+                    } else {
+                        sb.append("\\\"");   // escape the stray quote
+                    }
+                }
+                continue;
+            }
+            sb.append(c);
+        }
+        return sb.toString();
     }
 
     private ReflectionHint lastHint(TaskExecutionState state) {

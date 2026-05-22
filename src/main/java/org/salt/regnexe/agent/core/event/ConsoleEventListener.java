@@ -19,8 +19,7 @@ package org.salt.regnexe.agent.core.event;
  */
 public class ConsoleEventListener implements AgentEventListener {
 
-    @Override
-    public void onEvent(AgentEvent event) {
+    protected String format(AgentEvent event) {
         String prefix = switch (event.getType()) {
             case AGENT_STARTED        -> "[Agent         ]";
             case SEARCH_COMPLETED     -> "[Search        ]";
@@ -31,7 +30,13 @@ public class ConsoleEventListener implements AgentEventListener {
             case EXECUTION_COMPLETED  -> "[Execute       ]";
             case REFLECTION_COMPLETED -> "[Reflect       ]";
             case AGENT_COMPLETED      -> "[Done          ]";
+            case TOKEN_USAGE          -> "[Token Usage   ]";
         };
-        System.out.printf("%s R%d %s%n", prefix, event.getRound(), event.getText());
+        return String.format("%s R%d %s", prefix, event.getRound(), event.getText());
+    }
+
+    @Override
+    public void onEvent(AgentEvent event) {
+        System.out.println(format(event));
     }
 }

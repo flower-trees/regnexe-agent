@@ -16,6 +16,8 @@ package org.salt.regnexe.agent.core.event;
 
 import lombok.Builder;
 import lombok.Value;
+import org.salt.jlangchain.core.agent.AgentTokenUsageEvent;
+import org.salt.jlangchain.utils.JsonUtil;
 
 /**
  * A single observable event emitted during agent execution.
@@ -30,6 +32,7 @@ public class AgentEvent {
     int round;
     EventType type;
     String text;
+    AgentTokenUsageEvent tokenUsage;
     long timestamp;
 
     public static AgentEvent of(String taskId, int round, EventType type, String text) {
@@ -38,6 +41,17 @@ public class AgentEvent {
                 .round(round)
                 .type(type)
                 .text(text)
+                .timestamp(System.currentTimeMillis())
+                .build();
+    }
+
+    public static AgentEvent ofTokenUsage(String taskId, int round, AgentTokenUsageEvent usage) {
+        return AgentEvent.builder()
+                .taskId(taskId)
+                .round(round)
+                .type(EventType.TOKEN_USAGE)
+                .tokenUsage(usage)
+                .text(JsonUtil.toJson(usage))
                 .timestamp(System.currentTimeMillis())
                 .build();
     }
