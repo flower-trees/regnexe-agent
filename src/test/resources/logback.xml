@@ -12,7 +12,7 @@
     </encoder>
   </appender>
 
-  <logger name="org.salt.regnexeagent" level="INFO" additivity="false">
+  <logger name="org.salt.regnexe.agent" level="INFO" additivity="false">
     <appender-ref ref="CONSOLE"/>
   </logger>
 
