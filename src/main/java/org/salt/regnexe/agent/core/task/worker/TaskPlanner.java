@@ -54,6 +54,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             Rules:
             - Select only capabilities that are genuinely relevant to the goal.
             - The narrative should be clear, actionable instructions for the executor.
+            - CRITICAL: every capability name you mention in the narrative MUST also appear in selectedCapabilityIds.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
