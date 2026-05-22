@@ -50,7 +50,7 @@ import java.util.List;
 public class WeatherForecastTest {
 
     @Autowired
-    private RegnexeAgentBuilder heliosAgentBuilder;
+    private RegnexeAgentBuilder regnexeAgentBuilder;
 
     @Test
     public void weatherQueryShouldFinish() {
@@ -92,7 +92,7 @@ public class WeatherForecastTest {
 
         // ── Agent ────────────────────────────────────────────────────────────
 
-        RegnexeAgent agent = heliosAgentBuilder
+        RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withEventListener(new ConsoleEventListener())

@@ -55,7 +55,7 @@ import java.util.stream.Stream;
  * <pre>
  * marketplace.load(
  *     new DefaultPluginManager()
- *         .addDirectory("/opt/helios-plugins")
+ *         .addDirectory("/opt/regnexe-plugins")
  *         .scanPackages("com.example.plugins")
  *         .register(weatherBean)
  * );

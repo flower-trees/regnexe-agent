@@ -55,7 +55,7 @@ import java.util.List;
 public class TravelPlannerTest {
 
     @Autowired
-    private RegnexeAgentBuilder heliosAgentBuilder;
+    private RegnexeAgentBuilder regnexeAgentBuilder;
 
     @Autowired
     private ChainActor chainActor;
@@ -143,7 +143,7 @@ public class TravelPlannerTest {
 
         // ── Agent ────────────────────────────────────────────────────────────
 
-        RegnexeAgent agent = heliosAgentBuilder
+        RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withEventListener(new ConsoleEventListener())

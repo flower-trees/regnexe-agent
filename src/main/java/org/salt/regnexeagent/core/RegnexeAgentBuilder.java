@@ -44,7 +44,7 @@ import org.springframework.stereotype.Component;
  * runtime config via the fluent Builder returned by each with*() method.
  *
  * <pre>
- * RegnexeAgent agent = heliosAgentBuilder
+ * RegnexeAgent agent = regnexeAgentBuilder
  *     .withLlmProvider(myProvider)
  *     .withPluginMarket(marketplace)
  *     .build();

@@ -63,7 +63,7 @@ import java.util.UUID;
 public class SessionMemoryTest {
 
     @Autowired
-    private RegnexeAgentBuilder heliosAgentBuilder;
+    private RegnexeAgentBuilder regnexeAgentBuilder;
 
     @Test
     public void sessionHistoryShouldPersistAcrossExecutions() {
@@ -107,7 +107,7 @@ public class SessionMemoryTest {
 
         // ── Agent with shared session storage ─────────────────────────────────
 
-        RegnexeAgent agent = heliosAgentBuilder
+        RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withSessionStorage(sessionStorage)

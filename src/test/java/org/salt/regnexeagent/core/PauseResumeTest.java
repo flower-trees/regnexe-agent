@@ -67,7 +67,7 @@ import java.util.concurrent.TimeUnit;
 public class PauseResumeTest {
 
     @Autowired
-    private RegnexeAgentBuilder heliosAgentBuilder;
+    private RegnexeAgentBuilder regnexeAgentBuilder;
 
     // ── Shared tool / marketplace builder ────────────────────────────────────
 
@@ -110,7 +110,7 @@ public class PauseResumeTest {
 
         InMemoryTaskStore taskStore = new InMemoryTaskStore();
 
-        RegnexeAgent agent = heliosAgentBuilder
+        RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                 .withPluginMarket(buildMarketplace(weatherTool))
                 .withTaskStore(taskStore)
@@ -186,7 +186,7 @@ public class PauseResumeTest {
         InMemoryTaskStore taskStore = new InMemoryTaskStore();
         String sessionId = UUID.randomUUID().toString();
 
-        RegnexeAgent agent = heliosAgentBuilder
+        RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                 .withPluginMarket(buildMarketplace(slowWeatherTool))
                 .withTaskStore(taskStore)

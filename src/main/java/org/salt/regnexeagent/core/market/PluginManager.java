@@ -21,7 +21,7 @@ package org.salt.regnexeagent.core.market;
  * <p>Typical usage:
  * <pre>
  * DefaultPluginManager manager = new DefaultPluginManager()
- *     .addDirectory("/opt/helios-plugins")
+ *     .addDirectory("/opt/regnexe-plugins")
  *     .scanPackages("com.example.plugins")
  *     .register(weatherBean);
  *

@@ -75,7 +75,7 @@ import java.util.List;
 public class PluginLoadingTest {
 
     @Autowired
-    private RegnexeAgentBuilder heliosAgentBuilder;
+    private RegnexeAgentBuilder regnexeAgentBuilder;
 
     // ── Test 1: register() → descriptor check ────────────────────────────────
 
@@ -209,7 +209,7 @@ public class PluginLoadingTest {
             new DefaultPluginManager().register(new WeatherPlugin())
         );
 
-        RegnexeAgent agent = heliosAgentBuilder
+        RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withEventListener(new ConsoleEventListener())
@@ -238,7 +238,7 @@ public class PluginLoadingTest {
             SimpleMarketplace marketplace = new SimpleMarketplace();
             marketplace.load(new DefaultPluginManager().addDirectory(baseDir.toString()));
 
-            RegnexeAgent agent = heliosAgentBuilder
+            RegnexeAgent agent = regnexeAgentBuilder
                     .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                     .withPluginMarket(marketplace)
                     .withEventListener(new ConsoleEventListener())
@@ -281,7 +281,7 @@ public class PluginLoadingTest {
      * </pre>
      */
     private Path buildTempPluginDir(boolean withSkill, boolean withSubAgent) throws IOException {
-        Path baseDir = Files.createTempDirectory("helios-plugin-test-");
+        Path baseDir = Files.createTempDirectory("regnexe-plugin-test-");
         Path pluginDir = baseDir.resolve("dir-weather-plugin");
         Files.createDirectories(pluginDir);
 

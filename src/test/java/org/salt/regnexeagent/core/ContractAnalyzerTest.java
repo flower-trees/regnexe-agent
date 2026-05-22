@@ -55,7 +55,7 @@ import java.util.List;
 public class ContractAnalyzerTest {
 
     @Autowired
-    private RegnexeAgentBuilder heliosAgentBuilder;
+    private RegnexeAgentBuilder regnexeAgentBuilder;
 
     @Autowired
     private ChainActor chainActor;
@@ -131,7 +131,7 @@ public class ContractAnalyzerTest {
 
         // ── Agent ────────────────────────────────────────────────────────────
 
-        RegnexeAgent agent = heliosAgentBuilder
+        RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withEventListener(new ConsoleEventListener())
