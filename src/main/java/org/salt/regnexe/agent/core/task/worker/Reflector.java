@@ -141,6 +141,15 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             sb.append("Plan narrative: ").append(round.getPlan().getNarrative()).append("\n\n");
         }
 
+        if (round.getPlan() != null
+                && round.getPlan().getCapabilityInputDescriptions() != null
+                && !round.getPlan().getCapabilityInputDescriptions().isEmpty()) {
+            sb.append("Capability input descriptions used this round:\n");
+            round.getPlan().getCapabilityInputDescriptions()
+                 .forEach((k, v) -> sb.append("- ").append(k).append(": ").append(v).append("\n"));
+            sb.append("\n");
+        }
+
         sb.append("Execution result:\n");
         sb.append(execText != null ? execText : "(no output)").append("\n\n");
 

@@ -42,6 +42,7 @@ import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -65,6 +66,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         String narrative = bus.getTransmit(ContextBusKeys.PLAN_NARRATIVE);
         List<String> selectedCapIds = bus.getTransmit(ContextBusKeys.SELECTED_CAPS);
+        Map<String, String> inputDescs = bus.getTransmit(ContextBusKeys.CAPABILITY_INPUT_DESCS);
         AtomicBoolean stopSignal = bus.getTransmit(ContextBusKeys.STOP_SIGNAL);
         AgentContext agentContext = bus.getTransmit(ContextBusKeys.AGENT_CONTEXT);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
@@ -88,7 +90,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         ExecutionOutput output = new ExecutionOutput();
         try {
-            ChatGeneration result = executor.invoke(narrative, stopSignal);
+            ChatGeneration result = executor.invoke(buildAgentInput(narrative, inputDescs), stopSignal);
             output.setFinalText(result.getText());
             output.setStatus(ExecutionStatus.SUCCESS);
             bus.putTransmit(ContextBusKeys.EXEC_TEXT, result.getText());
@@ -114,6 +116,15 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         state.setUpdatedAt(System.currentTimeMillis());
         if (taskStore != null) taskStore.save(state);
         return null;
+    }
+
+    private String buildAgentInput(String narrative, Map<String, String> inputDescs) {
+        if (inputDescs == null || inputDescs.isEmpty()) return narrative;
+        StringBuilder sb = new StringBuilder(narrative)
+                .append("\n\nCapability input guidance:\n");
+        inputDescs.forEach((id, desc) ->
+                sb.append("- ").append(id).append(": ").append(desc).append("\n"));
+        return sb.toString();
     }
 
     private List<Tool> resolveTools(Marketplace marketplace, List<String> capIds,

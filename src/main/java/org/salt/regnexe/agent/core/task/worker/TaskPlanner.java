@@ -55,12 +55,20 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - Select only capabilities that are genuinely relevant to the goal.
             - The narrative should be clear, actionable instructions for the executor.
             - CRITICAL: every capability name you mention in the narrative MUST also appear in selectedCapabilityIds.
+            - For each selected capability, write a focused input description in capabilityInputDescriptions: \
+              describe what context to pass when invoking it (e.g. user goal, specific data, or the output \
+              of a preceding capability). Be specific — the executor uses these descriptions to construct \
+              the actual input and will not re-read the full narrative.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
             {
               "narrative": "<natural language instructions for the executor>",
               "selectedCapabilityIds": ["<id1>", "<id2>"],
+              "capabilityInputDescriptions": {
+                "<id1>": "<what to pass as input to this capability>",
+                "<id2>": "<what to pass; may reference the output of id1>"
+              },
               "reasoning": "<why you chose these capabilities>"
             }
             """;
@@ -89,6 +97,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
         bus.putTransmit(ContextBusKeys.PLAN_NARRATIVE, plan.getNarrative());
         bus.putTransmit(ContextBusKeys.SELECTED_CAPS, plan.getSelectedCapabilityIds());
+        bus.putTransmit(ContextBusKeys.CAPABILITY_INPUT_DESCS, plan.getCapabilityInputDescriptions());
 
         currentRound(state).setPlan(plan);
         state.setUpdatedAt(System.currentTimeMillis());

@@ -21,11 +21,12 @@ public final class ContextBusKeys {
 
     // --- ContextBus keys: intra-round, written and consumed within one loop iteration ---
 
-    public static final String CANDIDATES     = "candidates";
-    public static final String PLAN_NARRATIVE = "plan_narrative";
-    public static final String SELECTED_CAPS  = "selected_caps";
-    public static final String EXEC_TEXT      = "exec_text";
-    public static final String EXEC_TRACE     = "exec_trace";
+    public static final String CANDIDATES          = "candidates";
+    public static final String PLAN_NARRATIVE      = "plan_narrative";
+    public static final String SELECTED_CAPS       = "selected_caps";
+    public static final String CAPABILITY_INPUT_DESCS = "capability_input_descs";
+    public static final String EXEC_TEXT           = "exec_text";
+    public static final String EXEC_TRACE          = "exec_trace";
 
     // --- TransmitMap keys: cross-round, set by RegnexeAgent before the loop starts ---
 

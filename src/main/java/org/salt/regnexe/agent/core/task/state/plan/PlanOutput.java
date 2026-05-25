@@ -17,6 +17,7 @@ package org.salt.regnexe.agent.core.task.state.plan;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Planner output for one round
@@ -33,6 +34,13 @@ public class PlanOutput {
      * Capability ids selected from candidates for this round
      */
     private List<String> selectedCapabilityIds;
+
+    /**
+     * Per-capability input descriptions: guides CapabilityExecutor on what context
+     * to pass when invoking each capability. Values are natural language and may
+     * reference other capabilities' outputs (e.g. "pass the output of chapter_writer").
+     */
+    private Map<String, String> capabilityInputDescriptions;
 
     /**
      * Planner's reasoning, for auditing
