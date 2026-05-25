@@ -39,6 +39,7 @@ import org.salt.jlangchain.core.prompt.chat.ChatPromptTemplate;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Reads candidates from Searcher and produces a PlanOutput
@@ -88,7 +89,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
-        FlowInstance flow = buildFlow(chainActor, llm);
+        String taskId = state.getTaskId();
+        int round = state.getCurrentRound();
+        FlowInstance flow = buildFlow(chainActor, llm,
+                text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)));
 
         String userPrompt = buildPrompt(state, candidates, sessionSummary);
         ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
@@ -111,12 +115,16 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         return null;
     }
 
-    private FlowInstance buildFlow(ChainActor chainActor, BaseChatModel llm) {
+    private FlowInstance buildFlow(ChainActor chainActor, BaseChatModel llm, Consumer<String> onLlm) {
         return chainActor.builder()
                 .next(ChatPromptTemplate.fromMessages(List.of(
                         Pair.of("system", SYSTEM_PROMPT),
                         Pair.of("human", "${prompt}")
                 )))
+                .next(input -> {
+                    if (onLlm != null) onLlm.accept(input.toString());
+                    return input;
+                })
                 .next(llm)
                 .next(new StrOutputParser())
                 .build();

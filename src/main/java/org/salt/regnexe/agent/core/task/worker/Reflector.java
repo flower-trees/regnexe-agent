@@ -40,6 +40,7 @@ import org.salt.jlangchain.core.prompt.chat.ChatPromptTemplate;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Evaluates the execution result and decides whether to FINISH, CONTINUE, or ESCALATE.
@@ -93,7 +94,10 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         String execText = bus.getTransmit(ContextBusKeys.EXEC_TEXT);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
-        FlowInstance flow = buildFlow(chainActor, llm);
+        String taskId = state.getTaskId();
+        int roundNum = state.getCurrentRound();
+        FlowInstance flow = buildFlow(chainActor, llm,
+                text -> listener.onEvent(AgentEvent.of(taskId, roundNum, EventType.LLM_RESPONDED, text)));
 
         String userPrompt = buildPrompt(state, execText);
         ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
@@ -121,12 +125,16 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         return null;
     }
 
-    private FlowInstance buildFlow(ChainActor chainActor, BaseChatModel llm) {
+    private FlowInstance buildFlow(ChainActor chainActor, BaseChatModel llm, Consumer<String> onLlm) {
         return chainActor.builder()
                 .next(ChatPromptTemplate.fromMessages(List.of(
                         Pair.of("system", SYSTEM_PROMPT),
                         Pair.of("human", "${prompt}")
                 )))
+                .next(input -> {
+                    if (onLlm != null) onLlm.accept(input.toString());
+                    return input;
+                })
                 .next(llm)
                 .next(new StrOutputParser())
                 .build();
