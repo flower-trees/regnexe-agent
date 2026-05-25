@@ -34,6 +34,7 @@ import org.salt.regnexe.agent.core.task.worker.Reflector;
 import org.salt.regnexe.agent.core.task.worker.TaskPlanner;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
+import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.agent.memory.FullContext;
 import org.salt.jlangchain.core.history.storage.ConversationStorage;
 import org.salt.jlangchain.core.history.storage.InMemoryConversationStorage;
@@ -89,6 +90,10 @@ public class RegnexeAgentBuilder {
 
     public Builder withDefaultModel(Vendor vendor, String model) {
         return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model);
+    }
+
+    public Builder withDefaultModel(BaseChatModel llm) {
+        return new Builder(flowEngine, chainActor).withDefaultModel(llm);
     }
 
     public Builder withMaxRounds(int maxRounds) {
@@ -168,6 +173,12 @@ public class RegnexeAgentBuilder {
 
         public Builder withDefaultModel(Vendor vendor, String model) {
             this.defaultModel = ModelSpec.of(vendor, model);
+            return this;
+        }
+
+        public Builder withDefaultModel(BaseChatModel llm) {
+            this.llmProvider = spec -> llm.copy();
+            this.defaultModel = null;
             return this;
         }
 
