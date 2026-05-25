@@ -17,6 +17,7 @@ package org.salt.regnexe.agent.core.task.worker;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
@@ -41,8 +42,10 @@ import org.salt.jlangchain.core.subagent.SubAgent;
 import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -72,13 +75,19 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
-        List<Tool> tools = resolveTools(marketplace, selectedCapIds, chainActor, llm);
+
+        List<Tool> mcpTools = new ArrayList<>();
+        List<Skill> skills = new ArrayList<>();
+        List<SubAgent> subAgents = new ArrayList<>();
+        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, mcpTools, skills, subAgents);
 
         int round = state.getCurrentRound();
         String taskId = state.getTaskId();
         McpAgentExecutor executor = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
-                .tools(tools)
+                .tools(mcpTools)
+                .skills(skills)
+                .subAgents(subAgents)
                 .context(agentContext)
                 .onLlm(text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
                 .onToolCall(tc -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc)))
@@ -127,36 +136,60 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         return sb.toString();
     }
 
-    private List<Tool> resolveTools(Marketplace marketplace, List<String> capIds,
-                                    ChainActor chainActor, BaseChatModel llm) {
-        List<Tool> tools = new ArrayList<>();
-        if (marketplace == null || capIds == null) return tools;
+    /**
+     * Separates selected capabilities into MCP tools, Skills, and SubAgents.
+     * Also resolves each skill/subagent's allowedTools from the marketplace and
+     * adds them to mcpTools so McpAgentExecutor.build() can inject them correctly.
+     */
+    private void resolveCapabilities(Marketplace marketplace, List<String> capIds,
+                                     ChainActor chainActor, BaseChatModel llm,
+                                     List<Tool> mcpTools, List<Skill> skills, List<SubAgent> subAgents) {
+        if (marketplace == null || capIds == null) return;
+
         for (String capId : capIds) {
             CapabilityDescriptor cap = marketplace.resolveDescriptor(capId);
             if (cap == null) {
                 log.warn("Capability not found: {}", capId);
                 continue;
             }
-            Tool tool = buildTool(cap, chainActor, llm);
-            if (tool != null) {
-                tools.add(tool);
+            switch (cap.getType()) {
+                case MCP_TOOL -> mcpTools.add(cap.getTool());
+                case SKILL -> {
+                    if (cap.getSkillConfig() != null) {
+                        skills.add(Skill.from(cap.getSkillConfig(), chainActor).llm(llm).verbose(true).build());
+                    } else if (cap.getTool() != null) {
+                        mcpTools.add(cap.getTool());
+                    }
+                }
+                case SUB_AGENT -> {
+                    if (cap.getSubAgentConfig() != null) {
+                        subAgents.add(SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm).verbose(true).build());
+                    } else if (cap.getTool() != null) {
+                        mcpTools.add(cap.getTool());
+                    }
+                }
             }
         }
-        return tools;
-    }
 
-    private Tool buildTool(CapabilityDescriptor cap, ChainActor chainActor, BaseChatModel llm) {
-        return switch (cap.getType()) {
-            case MCP_TOOL  -> cap.getTool();
-            // If skillConfig is set (file-based plugin), build at execution time.
-            // If tool is set (programmatically pre-built), use it directly.
-            case SKILL     -> cap.getSkillConfig() != null
-                    ? Skill.from(cap.getSkillConfig(), chainActor).llm(llm).verbose(true).build().asTool()
-                    : cap.getTool();
-            case SUB_AGENT -> cap.getSubAgentConfig() != null
-                    ? SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm).verbose(true).build().asTool()
-                    : cap.getTool();
-        };
+        // Ensure each skill/subagent's allowedTools are present in mcpTools so that
+        // McpAgentExecutor.build() can inject them. These tools are internal to the
+        // skill/subagent and filtered by allowedTools during injection.
+        Set<String> existingNames = new HashSet<>();
+        mcpTools.forEach(t -> existingNames.add(t.getName()));
+
+        Set<String> allAllowed = new HashSet<>();
+        skills.forEach(s -> allAllowed.addAll(s.getAllowedTools()));
+        subAgents.forEach(a -> allAllowed.addAll(a.getAllowedTools()));
+
+        for (String toolName : allAllowed) {
+            if (existingNames.contains(toolName)) continue;
+            CapabilityDescriptor dep = marketplace.resolveDescriptor(toolName);
+            if (dep != null && dep.getType() == CapabilityType.MCP_TOOL
+                    && dep.getTool() != null) {
+                mcpTools.add(dep.getTool());
+                existingNames.add(toolName);
+            }
+        }
     }
 
     private RoundRecord currentRound(TaskExecutionState state) {
