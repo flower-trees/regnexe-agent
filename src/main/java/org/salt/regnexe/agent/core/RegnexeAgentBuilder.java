@@ -116,6 +116,10 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withAgentContext(context);
     }
 
+    public Builder withMaxContextOutputChars(int maxChars) {
+        return new Builder(flowEngine, chainActor).withMaxContextOutputChars(maxChars);
+    }
+
     /** Convenience: register one or more {@code @Plugin} beans without constructing a marketplace manually. */
     public Builder withPlugin(Object... pluginBeans) {
         return new Builder(flowEngine, chainActor).withPlugin(pluginBeans);
@@ -151,6 +155,7 @@ public class RegnexeAgentBuilder {
         private int sessionBufferSize = 10;
         private AgentContext agentContext;
         private int maxAgentIterations = 20;
+        private int maxContextOutputChars = 800;
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -228,6 +233,11 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        public Builder withMaxContextOutputChars(int maxChars) {
+            this.maxContextOutputChars = maxChars;
+            return this;
+        }
+
         /** Convenience: register one or more {@code @Plugin} beans without constructing a marketplace manually. */
         public Builder withPlugin(Object... pluginBeans) {
             if (this.marketplace == null) {
@@ -286,7 +296,8 @@ public class RegnexeAgentBuilder {
                     sessionStorage != null ? sessionStorage : new InMemoryConversationStorage(),
                     sessionBufferSize,
                     agentContext != null ? agentContext : FullContext.build(),
-                    maxAgentIterations
+                    maxAgentIterations,
+                    maxContextOutputChars
             );
         }
     }

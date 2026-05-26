@@ -60,6 +60,9 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
               describe what context to pass when invoking it (e.g. user goal, specific data, or the output \
               of a preceding capability). Be specific — the executor uses these descriptions to construct \
               the actual input and will not re-read the full narrative.
+            - EFFICIENCY: prefer the shortest execution path that achieves the goal. If a capability \
+              description states it already returns or saves the needed data, do NOT add another capability \
+              solely to re-read or re-save that same data.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:

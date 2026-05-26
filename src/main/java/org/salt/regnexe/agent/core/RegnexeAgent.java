@@ -38,10 +38,12 @@ import org.salt.regnexe.agent.core.task.worker.Reflector;
 import org.salt.regnexe.agent.core.task.worker.TaskPlanner;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
+import org.salt.regnexe.agent.core.common.util.TextCompressor;
 import org.salt.jlangchain.core.history.HistoryInfos;
 import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemoryReader;
 import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemoryStorer;
 import org.salt.jlangchain.core.history.storage.ConversationStorage;
+import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
 import org.salt.jlangchain.core.message.MessageType;
 
@@ -80,6 +82,7 @@ public class RegnexeAgent {
     private final int sessionBufferSize;
     private final AgentContext agentContext;
     private final int maxAgentIterations;
+    private final int maxContextOutputChars;
 
     /** Set at the start of each execute()/resume(); checked by pause(). */
     private volatile AtomicBoolean activeStopSignal;
@@ -100,7 +103,8 @@ public class RegnexeAgent {
                 ConversationStorage sessionStorage,
                 int sessionBufferSize,
                 AgentContext agentContext,
-                int maxAgentIterations) {
+                int maxAgentIterations,
+                int maxContextOutputChars) {
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -118,6 +122,7 @@ public class RegnexeAgent {
         this.sessionBufferSize = sessionBufferSize;
         this.agentContext = agentContext;
         this.maxAgentIterations = maxAgentIterations;
+        this.maxContextOutputChars = maxContextOutputChars;
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -258,6 +263,7 @@ public class RegnexeAgent {
             map.put(ContextBusKeys.SESSION_SUMMARY, sessionSummary);
         }
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
+        map.put(ContextBusKeys.MAX_CONTEXT_OUTPUT_CHARS, maxContextOutputChars);
         return map;
     }
 
@@ -315,6 +321,10 @@ public class RegnexeAgent {
             log.debug("Session storer skipped: no defaultModel configured for summary LLM");
             return;
         }
+        int sessionCap = Math.max(100, maxContextOutputChars / 2);
+        String storedAnswer = answer.length() > sessionCap
+                ? compressForSession(answer, sessionCap)
+                : answer;
         long longId = (long) sessionId.hashCode();
         ConversationSummaryBufferMemoryStorer storer = ConversationSummaryBufferMemoryStorer.builder()
                 .appId(0L).userId(0L).sessionId(longId)
@@ -326,9 +336,14 @@ public class RegnexeAgent {
                 .type(HistoryInfos.Type.NORMAL)
                 .messages(List.of(
                         BaseMessage.fromMessage(MessageType.HUMAN.getCode(), goal),
-                        BaseMessage.fromMessage(MessageType.AI.getCode(), answer)
+                        BaseMessage.fromMessage(MessageType.AI.getCode(), storedAnswer)
                 ))
                 .build();
         storer.storeHistory(turn);
+    }
+
+    private String compressForSession(String text, int targetChars) {
+        BaseChatModel llm = llmProvider.provide(defaultModel);
+        return TextCompressor.compress(text, targetChars, chainActor, llm);
     }
 }
