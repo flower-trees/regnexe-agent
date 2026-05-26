@@ -73,17 +73,18 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         AtomicBoolean stopSignal = bus.getTransmit(ContextBusKeys.STOP_SIGNAL);
         AgentContext agentContext = bus.getTransmit(ContextBusKeys.AGENT_CONTEXT);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
+        Integer maxAgentIterations = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
 
         List<Tool> mcpTools = new ArrayList<>();
         List<Skill> skills = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
-        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, mcpTools, skills, subAgents);
+        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, mcpTools, skills, subAgents, maxAgentIterations);
 
         int round = state.getCurrentRound();
         String taskId = state.getTaskId();
-        McpAgentExecutor executor = McpAgentExecutor.builder(chainActor)
+        McpAgentExecutor.Builder executorBuilder = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
                 .tools(mcpTools)
                 .skills(skills)
@@ -92,8 +93,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .onLlm(text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
                 .onToolCall(tc -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc)))
                 .onObservation(obs -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_RESULT, obs)))
-                .onTokenUsage(u -> listener.onEvent(AgentEvent.ofTokenUsage(taskId, round, u)))
-                .build();
+                .onTokenUsage(u -> listener.onEvent(AgentEvent.ofTokenUsage(taskId, round, u)));
+        if (maxAgentIterations != null) {
+            executorBuilder.maxIterations(maxAgentIterations);
+        }
+        McpAgentExecutor executor = executorBuilder.build();
 
         this.mcpAgentExecutor = executor;
 
@@ -143,7 +147,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
      */
     private void resolveCapabilities(Marketplace marketplace, List<String> capIds,
                                      ChainActor chainActor, BaseChatModel llm,
-                                     List<Tool> mcpTools, List<Skill> skills, List<SubAgent> subAgents) {
+                                     List<Tool> mcpTools, List<Skill> skills, List<SubAgent> subAgents,
+                                     Integer maxIterations) {
         if (marketplace == null || capIds == null) return;
 
         for (String capId : capIds) {
@@ -156,14 +161,18 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 case MCP_TOOL -> mcpTools.add(cap.getTool());
                 case SKILL -> {
                     if (cap.getSkillConfig() != null) {
-                        skills.add(Skill.from(cap.getSkillConfig(), chainActor).llm(llm).verbose(true).build());
+                        Skill.Builder sb = Skill.from(cap.getSkillConfig(), chainActor).llm(llm).verbose(true);
+                        if (maxIterations != null) sb.maxIterations(maxIterations);
+                        skills.add(sb.build());
                     } else if (cap.getTool() != null) {
                         mcpTools.add(cap.getTool());
                     }
                 }
                 case SUB_AGENT -> {
                     if (cap.getSubAgentConfig() != null) {
-                        subAgents.add(SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm).verbose(true).build());
+                        SubAgent.Builder ab = SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm).verbose(true);
+                        if (maxIterations != null) ab.maxIterations(maxIterations);
+                        subAgents.add(ab.build());
                     } else if (cap.getTool() != null) {
                         mcpTools.add(cap.getTool());
                     }

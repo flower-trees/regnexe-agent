@@ -150,6 +150,7 @@ public class RegnexeAgentBuilder {
         private ConversationStorage sessionStorage;
         private int sessionBufferSize = 10;
         private AgentContext agentContext;
+        private int maxAgentIterations = 20;
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -178,7 +179,7 @@ public class RegnexeAgentBuilder {
 
         public Builder withDefaultModel(BaseChatModel llm) {
             this.llmProvider = spec -> llm.copy();
-            this.defaultModel = null;
+            this.defaultModel = ModelSpec.of("_direct_");
             return this;
         }
 
@@ -219,6 +220,11 @@ public class RegnexeAgentBuilder {
 
         public Builder withAgentContext(AgentContext context) {
             this.agentContext = context;
+            return this;
+        }
+
+        public Builder withMaxAgentIterations(int maxIterations) {
+            this.maxAgentIterations = maxIterations;
             return this;
         }
 
@@ -279,7 +285,8 @@ public class RegnexeAgentBuilder {
                     eventListener != null ? eventListener : AgentEventListener.NO_OP,
                     sessionStorage != null ? sessionStorage : new InMemoryConversationStorage(),
                     sessionBufferSize,
-                    agentContext != null ? agentContext : FullContext.build()
+                    agentContext != null ? agentContext : FullContext.build(),
+                    maxAgentIterations
             );
         }
     }

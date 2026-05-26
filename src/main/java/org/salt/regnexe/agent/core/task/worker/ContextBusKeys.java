@@ -38,8 +38,9 @@ public final class ContextBusKeys {
     public static final String EVENT_LISTENER = "eventListener";
     public static final String STOP_SIGNAL    = "stopSignal";
     public static final String TASK_STORE     = "taskStore";
-    public static final String SESSION_SUMMARY = "sessionSummary";
-    public static final String AGENT_CONTEXT  = "agentContext";
+    public static final String SESSION_SUMMARY      = "sessionSummary";
+    public static final String AGENT_CONTEXT        = "agentContext";
+    public static final String MAX_AGENT_ITERATIONS = "maxAgentIterations";
 
     private ContextBusKeys() {}
 }
