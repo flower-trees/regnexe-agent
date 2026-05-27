@@ -32,10 +32,10 @@ import java.util.Map;
 public final class TextCompressor {
 
     private static final String PROMPT =
-            "Summarize the following execution result in 1-2 sentences " +
+            "Summarize the following text in 1-2 sentences " +
             "(no lists, max ${targetChars} characters). " +
-            "Cover: what task was completed, what the key output was, " +
-            "and whether it succeeded.\n\n${text}";
+            "Cover: what was done, what the key output was, and whether it succeeded. " +
+            "Respond in the same language as the input text.\n\n${text}";
 
     private TextCompressor() {}
 
