@@ -95,7 +95,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         String taskId = state.getTaskId();
         int round = state.getCurrentRound();
         FlowInstance flow = buildFlow(chainActor, llm,
-                text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)));
+                text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
         String userPrompt = buildPrompt(state, candidates, sessionSummary);
         ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));

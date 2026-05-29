@@ -42,6 +42,7 @@ public final class ContextBusKeys {
     public static final String AGENT_CONTEXT        = "agentContext";
     public static final String MAX_AGENT_ITERATIONS    = "maxAgentIterations";
     public static final String MAX_CONTEXT_OUTPUT_CHARS = "maxContextOutputChars";
+    public static final String VERBOSE                 = "verbose";
 
     private ContextBusKeys() {}
 }

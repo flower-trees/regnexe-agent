@@ -74,16 +74,18 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         AgentContext agentContext = bus.getTransmit(ContextBusKeys.AGENT_CONTEXT);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
         Integer maxAgentIterations = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
+        boolean verbose = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.VERBOSE));
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
+
+        int round = state.getCurrentRound();
+        String taskId = state.getTaskId();
 
         List<Tool> mcpTools = new ArrayList<>();
         List<Skill> skills = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
-        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, mcpTools, skills, subAgents, maxAgentIterations);
-
-        int round = state.getCurrentRound();
-        String taskId = state.getTaskId();
+        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, mcpTools, skills, subAgents,
+                maxAgentIterations, listener, taskId, round, verbose);
         McpAgentExecutor.Builder executorBuilder = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
                 .tools(mcpTools)
@@ -148,7 +150,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     private void resolveCapabilities(Marketplace marketplace, List<String> capIds,
                                      ChainActor chainActor, BaseChatModel llm,
                                      List<Tool> mcpTools, List<Skill> skills, List<SubAgent> subAgents,
-                                     Integer maxIterations) {
+                                     Integer maxIterations,
+                                     AgentEventListener listener, String taskId, int round, boolean verbose) {
         if (marketplace == null || capIds == null) return;
 
         for (String capId : capIds) {
@@ -161,7 +164,15 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 case MCP_TOOL -> mcpTools.add(cap.getTool());
                 case SKILL -> {
                     if (cap.getSkillConfig() != null) {
-                        Skill.Builder sb = Skill.from(cap.getSkillConfig(), chainActor).llm(llm).verbose(true);
+                        Skill.Builder sb = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
+                        if (verbose) {
+                            sb.verbose(true);
+                        } else {
+                            String name = cap.getName();
+                            sb.onLlm(text -> listener.onEvent(
+                                AgentEvent.of(taskId, round, EventType.SKILL_LLM_RESPONDED,
+                                              "[skill:" + name + "] " + text)));
+                        }
                         if (maxIterations != null) sb.maxIterations(maxIterations);
                         skills.add(sb.build());
                     } else if (cap.getTool() != null) {
@@ -170,7 +181,15 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 }
                 case SUB_AGENT -> {
                     if (cap.getSubAgentConfig() != null) {
-                        SubAgent.Builder ab = SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm).verbose(true);
+                        SubAgent.Builder ab = SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm);
+                        if (verbose) {
+                            ab.verbose(true);
+                        } else {
+                            String name = cap.getName();
+                            ab.onLlm(text -> listener.onEvent(
+                                AgentEvent.of(taskId, round, EventType.SKILL_LLM_RESPONDED,
+                                              "[subagent:" + name + "] " + text)));
+                        }
                         if (maxIterations != null) ab.maxIterations(maxIterations);
                         subAgents.add(ab.build());
                     } else if (cap.getTool() != null) {

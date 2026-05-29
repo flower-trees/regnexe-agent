@@ -24,9 +24,14 @@ public enum EventType {
     REFLECTION_COMPLETED,
     AGENT_COMPLETED,
 
-    // Inner loop — emitted by McpAgentExecutor hooks
+    // Inner loop — emitted by McpAgentExecutor hooks (outer executor)
     LLM_RESPONDED,
     TOOL_CALLED,
     TOOL_RESULT,
-    TOKEN_USAGE
+    TOKEN_USAGE,
+
+    // Phase-specific LLM hooks for trace clarity
+    PLAN_LLM_RESPONDED,
+    REFLECT_LLM_RESPONDED,
+    SKILL_LLM_RESPONDED
 }

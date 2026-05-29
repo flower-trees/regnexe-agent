@@ -83,6 +83,7 @@ public class RegnexeAgent {
     private final AgentContext agentContext;
     private final int maxAgentIterations;
     private final int maxContextOutputChars;
+    private final boolean verbose;
 
     /** Set at the start of each execute()/resume(); checked by pause(). */
     private volatile AtomicBoolean activeStopSignal;
@@ -104,7 +105,8 @@ public class RegnexeAgent {
                 int sessionBufferSize,
                 AgentContext agentContext,
                 int maxAgentIterations,
-                int maxContextOutputChars) {
+                int maxContextOutputChars,
+                boolean verbose) {
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -123,6 +125,7 @@ public class RegnexeAgent {
         this.agentContext = agentContext;
         this.maxAgentIterations = maxAgentIterations;
         this.maxContextOutputChars = maxContextOutputChars;
+        this.verbose = verbose;
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -264,6 +267,7 @@ public class RegnexeAgent {
         }
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
         map.put(ContextBusKeys.MAX_CONTEXT_OUTPUT_CHARS, maxContextOutputChars);
+        map.put(ContextBusKeys.VERBOSE, verbose);
         return map;
     }
 

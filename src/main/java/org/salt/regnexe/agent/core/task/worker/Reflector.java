@@ -97,7 +97,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         String taskId = state.getTaskId();
         int roundNum = state.getCurrentRound();
         FlowInstance flow = buildFlow(chainActor, llm,
-                text -> listener.onEvent(AgentEvent.of(taskId, roundNum, EventType.LLM_RESPONDED, text)));
+                text -> listener.onEvent(AgentEvent.of(taskId, roundNum, EventType.REFLECT_LLM_RESPONDED, text)));
 
         String userPrompt = buildPrompt(state, execText);
         ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
