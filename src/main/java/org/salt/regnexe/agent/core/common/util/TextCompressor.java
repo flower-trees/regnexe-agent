@@ -32,10 +32,13 @@ import java.util.Map;
 public final class TextCompressor {
 
     private static final String PROMPT =
-            "Summarize the following text in 1-2 sentences " +
-            "(no lists, max ${targetChars} characters). " +
-            "Cover: what was done, what the key output was, and whether it succeeded. " +
-            "Respond in the same language as the input text.\n\n${text}";
+            "Compress the following text to fit within ${targetChars} characters.\n" +
+            "Rules:\n" +
+            "- MUST preserve exactly: proper nouns, titles (书名/选题名/chapter titles), " +
+            "numbers, user selections/choices, and key decisions.\n" +
+            "- You MAY use brief bullet points for lists.\n" +
+            "- OMIT: background explanations, verbose descriptions, redundant context.\n" +
+            "Respond in the same language as the input.\n\n${text}";
 
     private TextCompressor() {}
 
