@@ -36,6 +36,7 @@ import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.agent.memory.FullContext;
+import org.salt.jlangchain.core.history.memory.ConversationMemory;
 import org.salt.jlangchain.core.history.storage.ConversationStorage;
 import org.salt.jlangchain.core.history.storage.InMemoryConversationStorage;
 import org.springframework.stereotype.Component;
@@ -120,6 +121,10 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withMaxContextOutputChars(maxChars);
     }
 
+    public Builder withSessionMemory(ConversationMemory memory) {
+        return new Builder(flowEngine, chainActor).withSessionMemory(memory);
+    }
+
     /** Convenience: register one or more {@code @Plugin} beans without constructing a marketplace manually. */
     public Builder withPlugin(Object... pluginBeans) {
         return new Builder(flowEngine, chainActor).withPlugin(pluginBeans);
@@ -157,6 +162,7 @@ public class RegnexeAgentBuilder {
         private int maxAgentIterations = 20;
         private int maxContextOutputChars = 800;
         private boolean verbose = false;
+        private ConversationMemory sessionMemory;
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -244,6 +250,17 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /**
+         * Override the default session memory strategy.
+         * The supplied instance must be scoped to a single session (sessionId is
+         * fixed at construction time) and must NOT be shared across concurrent
+         * agent executions — {@code storeHistory} is a non-atomic read-modify-write.
+         */
+        public Builder withSessionMemory(ConversationMemory memory) {
+            this.sessionMemory = memory;
+            return this;
+        }
+
         /** Convenience: register one or more {@code @Plugin} beans without constructing a marketplace manually. */
         public Builder withPlugin(Object... pluginBeans) {
             if (this.marketplace == null) {
@@ -304,7 +321,8 @@ public class RegnexeAgentBuilder {
                     agentContext != null ? agentContext : FullContext.build(),
                     maxAgentIterations,
                     maxContextOutputChars,
-                    verbose
+                    verbose,
+                    sessionMemory
             );
         }
     }

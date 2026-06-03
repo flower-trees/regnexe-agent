@@ -40,6 +40,8 @@ import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
 import org.salt.regnexe.agent.core.common.util.TextCompressor;
 import org.salt.jlangchain.core.history.HistoryInfos;
+import org.salt.jlangchain.core.history.memory.ConversationMemory;
+import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemory;
 import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemoryReader;
 import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemoryStorer;
 import org.salt.jlangchain.core.history.storage.ConversationStorage;
@@ -84,6 +86,7 @@ public class RegnexeAgent {
     private final int maxAgentIterations;
     private final int maxContextOutputChars;
     private final boolean verbose;
+    private final ConversationMemory sessionMemory;
 
     /** Set at the start of each execute()/resume(); checked by pause(). */
     private volatile AtomicBoolean activeStopSignal;
@@ -106,7 +109,8 @@ public class RegnexeAgent {
                 AgentContext agentContext,
                 int maxAgentIterations,
                 int maxContextOutputChars,
-                boolean verbose) {
+                boolean verbose,
+                ConversationMemory sessionMemory) {
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -126,6 +130,7 @@ public class RegnexeAgent {
         this.maxAgentIterations = maxAgentIterations;
         this.maxContextOutputChars = maxContextOutputChars;
         this.verbose = verbose;
+        this.sessionMemory = sessionMemory;
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -291,11 +296,17 @@ public class RegnexeAgent {
     // ── Session memory helpers ───────────────────────────────────────────────
 
     private String loadSessionSummary(String sessionId) {
-        if (sessionStorage == null) return null;
-        long longId = (long) sessionId.hashCode();
-        ConversationSummaryBufferMemoryReader reader = ConversationSummaryBufferMemoryReader.builder()
-                .appId(0L).userId(0L).sessionId(longId).storage(sessionStorage).build();
-        List<HistoryInfos> history = reader.readHistory();
+        List<HistoryInfos> history;
+        if (sessionMemory != null) {
+            history = sessionMemory.readHistory();
+        } else if (sessionStorage != null) {
+            long longId = (long) sessionId.hashCode();
+            history = ConversationSummaryBufferMemoryReader.builder()
+                    .appId(0L).userId(0L).sessionId(longId).storage(sessionStorage).build()
+                    .readHistory();
+        } else {
+            return null;
+        }
         if (history == null || history.isEmpty()) return null;
         return formatHistory(history);
     }
@@ -320,22 +331,26 @@ public class RegnexeAgent {
     }
 
     private void storeSessionRound(String sessionId, String goal, String answer) {
-        if (sessionStorage == null || answer == null || answer.isBlank()) return;
-        if (defaultModel == null) {
-            log.debug("Session storer skipped: no defaultModel configured for summary LLM");
-            return;
-        }
+        if (answer == null || answer.isBlank()) return;
         int sessionCap = Math.max(100, maxContextOutputChars / 2);
         String storedAnswer = answer.length() > sessionCap
                 ? compressForSession(answer, sessionCap)
                 : answer;
-        long longId = (long) sessionId.hashCode();
-        ConversationSummaryBufferMemoryStorer storer = ConversationSummaryBufferMemoryStorer.builder()
-                .appId(0L).userId(0L).sessionId(longId)
-                .maxSize(sessionBufferSize)
-                .storage(sessionStorage)
-                .llm(llmProvider.provide(defaultModel))
-                .build();
+        ConversationMemory memory = sessionMemory;
+        if (memory == null) {
+            if (sessionStorage == null) return;
+            if (defaultModel == null) {
+                log.debug("Session storer skipped: no defaultModel configured for summary LLM");
+                return;
+            }
+            long longId = (long) sessionId.hashCode();
+            memory = ConversationSummaryBufferMemory.builder()
+                    .appId(0L).userId(0L).sessionId(longId)
+                    .maxSize(sessionBufferSize)
+                    .storage(sessionStorage)
+                    .llm(llmProvider.provide(defaultModel))
+                    .build();
+        }
         HistoryInfos turn = HistoryInfos.builder()
                 .type(HistoryInfos.Type.NORMAL)
                 .messages(List.of(
@@ -343,7 +358,7 @@ public class RegnexeAgent {
                         BaseMessage.fromMessage(MessageType.AI.getCode(), storedAnswer)
                 ))
                 .build();
-        storer.storeHistory(turn);
+        memory.storeHistory(turn);
     }
 
     private String compressForSession(String text, int targetChars) {
