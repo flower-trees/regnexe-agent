@@ -165,6 +165,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 case SKILL -> {
                     if (cap.getSkillConfig() != null) {
                         Skill.Builder sb = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
+                        if (cap.getOwnTools() != null && !cap.getOwnTools().isEmpty()) {
+                            sb.tools(cap.getOwnTools());
+                        }
                         if (verbose) {
                             sb.verbose(true);
                         } else {
@@ -182,6 +185,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 case SUB_AGENT -> {
                     if (cap.getSubAgentConfig() != null) {
                         SubAgent.Builder ab = SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm);
+                        if (cap.getOwnTools() != null && !cap.getOwnTools().isEmpty()) {
+                            ab.tools(cap.getOwnTools());
+                        }
                         if (verbose) {
                             ab.verbose(true);
                         } else {

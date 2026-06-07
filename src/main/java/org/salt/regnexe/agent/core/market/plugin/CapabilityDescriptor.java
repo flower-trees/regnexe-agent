@@ -61,4 +61,11 @@ public class CapabilityDescriptor {
 
     /** Set for SUB_AGENT: built into a Tool by CapabilityExecutor at execution time. */
     private SubAgentConfig subAgentConfig;
+
+    /**
+     * Private tools injected directly into the Skill/SubAgent's own tool registry.
+     * These are never exposed to the master LLM and do not appear in the marketplace.
+     * Use this for internal tools that should only be callable by this specific capability.
+     */
+    private List<Tool> ownTools;
 }
