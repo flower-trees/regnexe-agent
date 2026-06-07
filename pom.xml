@@ -4,7 +4,7 @@
 
   <groupId>io.github.flower-trees</groupId>
   <artifactId>regnexe-agent</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0</version>
   <packaging>jar</packaging>
 
   <name>regnexe-agent</name>
@@ -40,7 +40,7 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <j.langchain.version>1.0.16-SNAPSHOT</j.langchain.version>
+    <j.langchain.version>1.0.16</j.langchain.version>
     <lombok.version>1.18.24</lombok.version>
   </properties>
 
@@ -151,7 +151,7 @@
         <version>0.6.0</version>
         <extensions>true</extensions>
         <configuration>
-          <publishingServerId>central</publishingServerId>
+          <publishingServerId>ossrh</publishingServerId>
           <autoPublish>true</autoPublish>
           <waitUntil>published</waitUntil>
         </configuration>
