@@ -39,6 +39,7 @@ import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
 import org.salt.jlangchain.core.skill.Skill;
 import org.salt.jlangchain.core.subagent.SubAgent;
+import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.ArrayList;
@@ -84,7 +85,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         List<Tool> mcpTools = new ArrayList<>();
         List<Skill> skills = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
-        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, mcpTools, skills, subAgents,
+        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skills, subAgents,
                 maxAgentIterations, listener, taskId, round, verbose);
         McpAgentExecutor.Builder executorBuilder = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
@@ -148,7 +149,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
      * adds them to mcpTools so McpAgentExecutor.build() can inject them correctly.
      */
     private void resolveCapabilities(Marketplace marketplace, List<String> capIds,
-                                     ChainActor chainActor, BaseChatModel llm,
+                                     ChainActor chainActor, BaseChatModel llm, ModelProvider llmProvider,
                                      List<Tool> mcpTools, List<Skill> skills, List<SubAgent> subAgents,
                                      Integer maxIterations,
                                      AgentEventListener listener, String taskId, int round, boolean verbose) {
@@ -184,7 +185,18 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 }
                 case SUB_AGENT -> {
                     if (cap.getSubAgentConfig() != null) {
-                        SubAgent.Builder ab = SubAgent.from(cap.getSubAgentConfig(), chainActor).llm(llm);
+                        SubAgentConfig cfg = cap.getSubAgentConfig();
+                        SubAgent.Builder ab = SubAgent.from(cfg, chainActor);
+                        if (cfg.isInheritModel() || cfg.getModel() == null) {
+                            ab.llm(llm);
+                        } else {
+                            ab.llmFactory(name -> {
+                                int sep = name.indexOf(':');
+                                return sep > 0
+                                        ? llmProvider.provide(ModelSpec.of(name.substring(0, sep), name.substring(sep + 1)))
+                                        : llmProvider.provide(ModelSpec.of(name));
+                            });
+                        }
                         if (cap.getOwnTools() != null && !cap.getOwnTools().isEmpty()) {
                             ab.tools(cap.getOwnTools());
                         }
