@@ -33,5 +33,6 @@ public enum EventType {
     // Phase-specific LLM hooks for trace clarity
     PLAN_LLM_RESPONDED,
     REFLECT_LLM_RESPONDED,
-    SKILL_LLM_RESPONDED
+    SKILL_LLM_RESPONDED,
+    AGENT_LLM_RESPONDED
 }

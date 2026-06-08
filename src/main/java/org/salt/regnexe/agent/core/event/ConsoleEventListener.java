@@ -30,6 +30,7 @@ public class ConsoleEventListener implements AgentEventListener {
             case PLAN_LLM_RESPONDED   -> "[Plan LLM      ]";
             case REFLECT_LLM_RESPONDED-> "[Reflect LLM   ]";
             case SKILL_LLM_RESPONDED  -> "[Skill LLM     ]";
+            case AGENT_LLM_RESPONDED  -> "[SubAgent LLM  ]";
             case EXECUTION_COMPLETED  -> "[Execute       ]";
             case REFLECTION_COMPLETED -> "[Reflect       ]";
             case AGENT_COMPLETED      -> "[Done          ]";

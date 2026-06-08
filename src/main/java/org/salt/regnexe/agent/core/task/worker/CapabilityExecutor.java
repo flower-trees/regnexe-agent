@@ -205,7 +205,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                         } else {
                             String name = cap.getName();
                             ab.onLlm(text -> listener.onEvent(
-                                AgentEvent.of(taskId, round, EventType.SKILL_LLM_RESPONDED,
+                                AgentEvent.of(taskId, round, EventType.AGENT_LLM_RESPONDED,
                                               "[subagent:" + name + "] " + text)));
                         }
                         if (maxIterations != null) ab.maxIterations(maxIterations);
