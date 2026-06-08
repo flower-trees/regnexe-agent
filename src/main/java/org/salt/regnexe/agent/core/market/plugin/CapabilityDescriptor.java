@@ -68,4 +68,10 @@ public class CapabilityDescriptor {
      * Use this for internal tools that should only be callable by this specific capability.
      */
     private List<Tool> ownTools;
+
+    /**
+     * Extra kwargs passed to the LLM builder when this capability's model is resolved
+     * (e.g. temperature, thinking). Null = provider defaults.
+     */
+    private java.util.Map<String, Object> modelKwargs;
 }

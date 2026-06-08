@@ -190,11 +190,13 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                         if (cfg.isInheritModel() || cfg.getModel() == null) {
                             ab.llm(llm);
                         } else {
+                            java.util.Map<String, Object> capKwargs = cap.getModelKwargs();
                             ab.llmFactory(name -> {
                                 int sep = name.indexOf(':');
-                                return sep > 0
-                                        ? llmProvider.provide(ModelSpec.of(name.substring(0, sep), name.substring(sep + 1)))
-                                        : llmProvider.provide(ModelSpec.of(name));
+                                ModelSpec spec = sep > 0
+                                        ? ModelSpec.of(name.substring(0, sep), name.substring(sep + 1), capKwargs)
+                                        : ModelSpec.of(null, name, capKwargs);
+                                return llmProvider.provide(spec);
                             });
                         }
                         if (cap.getOwnTools() != null && !cap.getOwnTools().isEmpty()) {
