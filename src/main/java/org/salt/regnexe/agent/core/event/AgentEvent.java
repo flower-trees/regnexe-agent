@@ -16,8 +16,12 @@ package org.salt.regnexe.agent.core.event;
 
 import lombok.Builder;
 import lombok.Value;
+import org.salt.jlangchain.ai.common.param.AiTokenUsage;
 import org.salt.jlangchain.core.agent.AgentTokenUsageEvent;
 import org.salt.jlangchain.utils.JsonUtil;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * A single observable event emitted during agent execution.
@@ -52,6 +56,31 @@ public class AgentEvent {
                 .type(EventType.TOKEN_USAGE)
                 .tokenUsage(usage)
                 .text(JsonUtil.toJson(usage))
+                .timestamp(System.currentTimeMillis())
+                .build();
+    }
+
+    public static AgentEvent ofCapabilityTokenUsage(String taskId, int round, String capName,
+                                                    AgentTokenUsageEvent usage) {
+        return AgentEvent.builder()
+                .taskId(taskId)
+                .round(round)
+                .type(EventType.CAPABILITY_TOKEN_USAGE)
+                .tokenUsage(usage)
+                .text("[" + capName + "] " + JsonUtil.toJson(usage))
+                .timestamp(System.currentTimeMillis())
+                .build();
+    }
+
+    public static AgentEvent ofTaskTokenSummary(String taskId, int round,
+                                                AiTokenUsage total, Map<String, AiTokenUsage> byModel) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("total", total);
+        summary.put("by_model", byModel);
+        return AgentEvent.builder()
+                .taskId(taskId).round(round)
+                .type(EventType.TASK_TOKEN_SUMMARY)
+                .text(JsonUtil.toJson(summary))
                 .timestamp(System.currentTimeMillis())
                 .build();
     }

@@ -177,6 +177,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                 AgentEvent.of(taskId, round, EventType.SKILL_LLM_RESPONDED,
                                               "[skill:" + name + "] " + text)));
                         }
+                        String skillCapName = cap.getName();
+                        sb.onTokenUsage(u -> listener.onEvent(
+                            AgentEvent.ofCapabilityTokenUsage(taskId, round, skillCapName, u)));
                         if (maxIterations != null) sb.maxIterations(maxIterations);
                         skills.add(sb.build());
                     } else if (cap.getTool() != null) {
@@ -210,6 +213,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                 AgentEvent.of(taskId, round, EventType.AGENT_LLM_RESPONDED,
                                               "[subagent:" + name + "] " + text)));
                         }
+                        String agentCapName = cap.getName();
+                        ab.onTokenUsage(u -> listener.onEvent(
+                            AgentEvent.ofCapabilityTokenUsage(taskId, round, agentCapName, u)));
                         if (maxIterations != null) ab.maxIterations(maxIterations);
                         subAgents.add(ab.build());
                     } else if (cap.getTool() != null) {

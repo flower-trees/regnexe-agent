@@ -35,6 +35,8 @@ public class ConsoleEventListener implements AgentEventListener {
             case REFLECTION_COMPLETED -> "[Reflect       ]";
             case AGENT_COMPLETED      -> "[Done          ]";
             case TOKEN_USAGE          -> "[Token Usage   ]";
+            case CAPABILITY_TOKEN_USAGE -> "[Cap Token Usage]";
+            case TASK_TOKEN_SUMMARY    -> "[Task Token     ]";
         };
         return String.format("%s R%d %s", prefix, event.getRound(), event.getText());
     }

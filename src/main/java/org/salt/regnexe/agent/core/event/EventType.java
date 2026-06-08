@@ -34,5 +34,11 @@ public enum EventType {
     PLAN_LLM_RESPONDED,
     REFLECT_LLM_RESPONDED,
     SKILL_LLM_RESPONDED,
-    AGENT_LLM_RESPONDED
+    AGENT_LLM_RESPONDED,
+
+    // Token usage from inner capability (Skill / SubAgent) LLM calls
+    CAPABILITY_TOKEN_USAGE,
+
+    // Aggregated token summary emitted once per task just before AGENT_COMPLETED
+    TASK_TOKEN_SUMMARY
 }

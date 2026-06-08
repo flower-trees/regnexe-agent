@@ -17,6 +17,7 @@ package org.salt.regnexe.agent.core;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
+import org.salt.regnexe.agent.core.event.TokenAggregatingEventListener;
 import org.salt.regnexe.agent.core.llm.DefaultModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
@@ -150,6 +151,7 @@ public class RegnexeAgentBuilder {
         private final ChainActor chainActor;
 
         private ModelProvider llmProvider;
+        private BaseChatModel directLlm;
         private ModelSpec defaultModel;
         private Marketplace marketplace;
         private TaskStore taskStore;
@@ -190,7 +192,7 @@ public class RegnexeAgentBuilder {
         }
 
         public Builder withDefaultModel(BaseChatModel llm) {
-            this.llmProvider = spec -> llm.copy();
+            this.directLlm = llm;
             this.defaultModel = ModelSpec.of("_direct_");
             return this;
         }
@@ -299,7 +301,14 @@ public class RegnexeAgentBuilder {
         }
 
         public RegnexeAgent build() {
-            ModelProvider resolvedProvider = llmProvider != null ? llmProvider : new DefaultModelProvider();
+            ModelProvider baseProvider = llmProvider != null ? llmProvider : new DefaultModelProvider();
+            // withDefaultModel(BaseChatModel) stores a direct LLM for the "_direct_" spec.
+            // Wrap the provider so "_direct_" returns that LLM while all other specs (SubAgent
+            // custom models) still go through the real provider.
+            final BaseChatModel direct = this.directLlm;
+            ModelProvider resolvedProvider = direct != null
+                    ? spec -> "_direct_".equals(spec.getModel()) ? direct.copy() : baseProvider.provide(spec)
+                    : baseProvider;
             Marketplace resolvedMarketplace = marketplace != null ? marketplace : new SimpleMarketplace();
 
             return new RegnexeAgent(
@@ -315,7 +324,7 @@ public class RegnexeAgentBuilder {
                     taskStore != null ? taskStore : new InMemoryTaskStore(),
                     resultComposer != null ? resultComposer : new DefaultResultComposer(),
                     maxRounds,
-                    eventListener != null ? eventListener : AgentEventListener.NO_OP,
+                    new TokenAggregatingEventListener(eventListener != null ? eventListener : AgentEventListener.NO_OP),
                     sessionStorage != null ? sessionStorage : new InMemoryConversationStorage(),
                     sessionBufferSize,
                     agentContext != null ? agentContext : FullContext.build(),
