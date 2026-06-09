@@ -73,10 +73,16 @@ public class AgentEvent {
     }
 
     public static AgentEvent ofTaskTokenSummary(String taskId, int round,
-                                                AiTokenUsage total, Map<String, AiTokenUsage> byModel) {
+                                                AiTokenUsage total, Map<String, AiTokenUsage> byModel,
+                                                long elapsedMs, long llmMs, Map<String, Long> llmMsByModel) {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("total", total);
         summary.put("by_model", byModel);
+        summary.put("elapsed_ms", elapsedMs);
+        summary.put("llm_ms", llmMs);
+        if (llmMsByModel != null && !llmMsByModel.isEmpty()) {
+            summary.put("llm_ms_by_model", llmMsByModel);
+        }
         return AgentEvent.builder()
                 .taskId(taskId).round(round)
                 .type(EventType.TASK_TOKEN_SUMMARY)

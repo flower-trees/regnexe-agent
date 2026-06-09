@@ -32,9 +32,20 @@ public class TokenAggregatingEventListener implements AgentEventListener {
 
     private final AgentEventListener delegate;
 
-    // taskId -> (modelKey -> accumulated AiTokenUsage)
+    // parentTaskId -> (modelKey -> accumulated AiTokenUsage)
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, AiTokenUsage>> accumulator =
             new ConcurrentHashMap<>();
+
+    // parentTaskId -> (subTaskId -> last seen cumulative toolCalls) — used to compute per-event delta
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, Long>> toolCallsTracker =
+            new ConcurrentHashMap<>();
+
+    // parentTaskId -> (modelKey -> accumulated LLM duration ms)
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, Long>> llmDurationMs =
+            new ConcurrentHashMap<>();
+
+    // parentTaskId -> timestamp of first token event (ms)
+    private final ConcurrentHashMap<String, Long> taskStartMs = new ConcurrentHashMap<>();
 
     public TokenAggregatingEventListener(AgentEventListener delegate) {
         this.delegate = delegate;
@@ -48,7 +59,7 @@ public class TokenAggregatingEventListener implements AgentEventListener {
                 delegate.onEvent(event);
             }
             case AGENT_COMPLETED -> {
-                emitSummary(event.getTaskId(), event.getRound());
+                emitSummary(event.getTaskId(), event.getRound(), event.getTimestamp());
                 delegate.onEvent(event);
             }
             default -> delegate.onEvent(event);
@@ -61,26 +72,57 @@ public class TokenAggregatingEventListener implements AgentEventListener {
         AiTokenUsage delta = usageEvent.getDeltaUsage();
         if (delta == null) return;
 
+        String parentTaskId = event.getTaskId() != null ? event.getTaskId() : "";
+        String subTaskId = usageEvent.getTaskId() != null ? usageEvent.getTaskId() : parentTaskId;
         String provider = delta.getProvider() != null ? delta.getProvider() : "unknown";
         String model = delta.getModel() != null ? delta.getModel() : "unknown";
         String modelKey = provider + ":" + model;
-        String taskId = event.getTaskId() != null ? event.getTaskId() : "";
+
+        // Compute tool_calls delta: event.toolCalls is cumulative per sub-task; delta_usage always has 0
+        long currentToolCalls = usageEvent.getToolCalls();
+        long prevToolCalls = toolCallsTracker
+                .computeIfAbsent(parentTaskId, k -> new ConcurrentHashMap<>())
+                .getOrDefault(subTaskId, 0L);
+        toolCallsTracker.get(parentTaskId).put(subTaskId, currentToolCalls);
+
+        AiTokenUsage effectiveDelta = delta.copy();
+        effectiveDelta.setToolCalls(currentToolCalls - prevToolCalls);
 
         accumulator
-                .computeIfAbsent(taskId, k -> new ConcurrentHashMap<>())
-                .merge(modelKey, delta.copy(), (existing, incoming) -> {
+                .computeIfAbsent(parentTaskId, k -> new ConcurrentHashMap<>())
+                .merge(modelKey, effectiveDelta, (existing, incoming) -> {
                     existing.add(incoming);
                     return existing;
                 });
+
+        // Accumulate LLM inference duration
+        llmDurationMs
+                .computeIfAbsent(parentTaskId, k -> new ConcurrentHashMap<>())
+                .merge(modelKey, usageEvent.getDeltaDurationMs(), Long::sum);
+
+        // Record first event timestamp as task start
+        taskStartMs.computeIfAbsent(parentTaskId, k -> event.getTimestamp());
     }
 
-    private void emitSummary(String taskId, int round) {
-        Map<String, AiTokenUsage> modelMap = accumulator.remove(taskId != null ? taskId : "");
+    private void emitSummary(String taskId, int round, long completedAt) {
+        String key = taskId != null ? taskId : "";
+        Map<String, AiTokenUsage> modelMap = accumulator.remove(key);
+        toolCallsTracker.remove(key);
+        Map<String, Long> durations = llmDurationMs.remove(key);
+        Long startTime = taskStartMs.remove(key);
+
         if (modelMap == null || modelMap.isEmpty()) return;
 
         AiTokenUsage total = AiTokenUsage.empty();
         modelMap.values().forEach(total::add);
+        total.setProvider(null);
+        total.setModel(null);
 
-        delegate.onEvent(AgentEvent.ofTaskTokenSummary(taskId, round, total, modelMap));
+        long elapsedMs = (startTime != null && completedAt > 0) ? (completedAt - startTime) : 0;
+        long totalLlmMs = durations != null ? durations.values().stream().mapToLong(Long::longValue).sum() : 0;
+
+        delegate.onEvent(AgentEvent.ofTaskTokenSummary(
+                taskId, round, total, modelMap, elapsedMs, totalLlmMs,
+                durations != null ? durations : Map.of()));
     }
 }
