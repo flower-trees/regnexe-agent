@@ -63,7 +63,7 @@ CapabilityDescriptor
 <dependency>
     <groupId>io.github.flower-trees</groupId>
     <artifactId>regnexe-agent</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
 </dependency>
 ```
 
