@@ -14,6 +14,7 @@
 
 package org.salt.regnexe.agent.core.event;
 
+import com.fasterxml.jackson.databind.node.LongNode;
 import lombok.Builder;
 import lombok.Value;
 import org.salt.jlangchain.ai.common.param.AiTokenUsage;
@@ -75,13 +76,16 @@ public class AgentEvent {
     public static AgentEvent ofTaskTokenSummary(String taskId, int round,
                                                 AiTokenUsage total, Map<String, AiTokenUsage> byModel,
                                                 long elapsedMs, long llmMs, Map<String, Long> llmMsByModel) {
+        // LongNode prevents JsonUtil's Long→String serializer from turning numbers into quoted strings
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("total", total);
         summary.put("by_model", byModel);
-        summary.put("elapsed_ms", elapsedMs);
-        summary.put("llm_ms", llmMs);
+        summary.put("elapsed_ms", new LongNode(elapsedMs));
+        summary.put("llm_ms", new LongNode(llmMs));
         if (llmMsByModel != null && !llmMsByModel.isEmpty()) {
-            summary.put("llm_ms_by_model", llmMsByModel);
+            Map<String, LongNode> nodeMap = new LinkedHashMap<>();
+            llmMsByModel.forEach((k, v) -> nodeMap.put(k, new LongNode(v)));
+            summary.put("llm_ms_by_model", nodeMap);
         }
         return AgentEvent.builder()
                 .taskId(taskId).round(round)
