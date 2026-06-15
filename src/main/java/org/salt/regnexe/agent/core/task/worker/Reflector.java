@@ -61,6 +61,11 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
 
             Rules:
             - hintForNext must be null when action is FINISH or ESCALATE.
+            - CROSS-CHECK: If the Goal specifies concrete constraints (specific items to upgrade, specific \
+              settings or scenes, named entities), verify the execution result honors those constraints. \
+              If the result deviates — e.g. the setting changes, named entities disappear, or required \
+              items are replaced wholesale — action should be CONTINUE, not FINISH. Describe the deviation \
+              in planAdjustment.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:

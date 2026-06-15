@@ -60,6 +60,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
               describe what context to pass when invoking it (e.g. user goal, specific data, or the output \
               of a preceding capability). Be specific — the executor uses these descriptions to construct \
               the actual input and will not re-read the full narrative.
+            - DATA MATERIALIZATION: If the input to a capability requires data that already appears in the \
+              Goal or session history (e.g. existing topics, user modification feedback, chapter content), \
+              you MUST copy that data verbatim into capabilityInputDescriptions. Never use references such \
+              as "see above", "as described", or "from the goal" — the executor has no access to those references.
             - EFFICIENCY: prefer the shortest execution path that achieves the goal. If a capability \
               description states it already returns or saves the needed data, do NOT add another capability \
               solely to re-read or re-save that same data.
@@ -176,7 +180,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             RoundRecord prev = rounds.get(rounds.size() - 2);
             if (prev.getExecutionResult() != null && prev.getExecutionResult().getFinalText() != null) {
                 String text = prev.getExecutionResult().getFinalText();
-                sb.append(text.length() > 500 ? text.substring(0, 500) + "..." : text).append("\n");
+                sb.append(text).append("\n");
             }
         }
 
