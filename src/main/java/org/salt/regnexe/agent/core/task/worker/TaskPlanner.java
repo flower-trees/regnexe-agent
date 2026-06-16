@@ -148,7 +148,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                                             List<HistoryInfos> sessionHistory) {
         List<BaseMessage> messages = new ArrayList<>();
 
-        // ── System message: SYSTEM_PROMPT + summary + capabilities ───────────
+        // ── System message: SYSTEM_PROMPT + SUMMARY + capabilities ───────────
         StringBuilder systemSb = new StringBuilder(SYSTEM_PROMPT);
 
         if (sessionHistory != null) {
@@ -170,27 +170,28 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
         messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), systemSb.toString()));
 
-        // ── Human message: history (as formatted text) + goal + guidance ─────
-        // NORMAL history turns are injected as formatted reference text, NOT as
-        // actual Human/AI message pairs, to prevent the LLM from mimicking prior
-        // task results instead of producing a JSON plan.
-        StringBuilder humanSb = new StringBuilder();
-
+        // ── NORMAL history as actual Human/AI message pairs ───────────────────
+        boolean hasHistory = false;
         if (sessionHistory != null) {
-            StringBuilder histSb = new StringBuilder();
             for (HistoryInfos h : sessionHistory) {
                 if (h.getType() != HistoryInfos.Type.NORMAL) continue;
                 for (BaseMessage msg : h.getMessages()) {
-                    String role = MessageType.HUMAN.getCode().equals(msg.getRole()) ? "User" : "Assistant";
-                    histSb.append(role).append(": ").append(msg.getContent()).append("\n");
+                    messages.add(BaseMessage.fromMessage(msg.getRole(), msg.getContent()));
                 }
-                histSb.append("\n");
-            }
-            if (!histSb.isEmpty()) {
-                humanSb.append("== Session history (for context only) ==\n").append(histSb);
+                hasHistory = true;
             }
         }
 
+        // ── Separator: break few-shot mimicking before the current goal ───────
+        if (hasHistory) {
+            messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(),
+                    "The conversation history above is provided for context only. " +
+                    "Now output a JSON execution plan for the new goal below. " +
+                    "Do NOT replicate any prior response format — output ONLY the JSON object."));
+        }
+
+        // ── Current goal HumanMessage ─────────────────────────────────────────
+        StringBuilder humanSb = new StringBuilder();
         humanSb.append("Goal: ").append(state.getRequest().getGoal());
 
         String supplement = state.getRequest().getSupplementInput();
