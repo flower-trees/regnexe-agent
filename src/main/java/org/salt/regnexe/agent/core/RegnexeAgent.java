@@ -147,8 +147,8 @@ public class RegnexeAgent {
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), 0, EventType.AGENT_STARTED,
                 "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds));
 
-        String sessionSummary = loadSessionSummary(state.getSessionId());
-        return runLoop(state, sessionSummary);
+        List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
+        return runLoop(state, sessionHistory);
     }
 
     /**
@@ -175,8 +175,8 @@ public class RegnexeAgent {
                 "Resuming | rounds done: " + state.getCurrentRound()
                 + (supplementInput != null ? " | supplement: " + supplementInput : "")));
 
-        String sessionSummary = loadSessionSummary(state.getSessionId());
-        return runLoop(state, sessionSummary);
+        List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
+        return runLoop(state, sessionHistory);
     }
 
     /**
@@ -193,11 +193,11 @@ public class RegnexeAgent {
 
     // ── Loop ─────────────────────────────────────────────────────────────────
 
-    private AgentResult runLoop(TaskExecutionState state, String sessionSummary) {
+    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory) {
         AtomicBoolean stopSignal = new AtomicBoolean(false);
         this.activeStopSignal = stopSignal;
 
-        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionSummary);
+        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory);
 
         // Loop condition uses state.getCurrentRound() so resume continues correctly
         // from wherever the prior execution left off.
@@ -249,7 +249,7 @@ public class RegnexeAgent {
 
     private Map<String, Object> buildTransmitMap(TaskExecutionState state,
                                                   AtomicBoolean stopSignal,
-                                                  String sessionSummary) {
+                                                  List<HistoryInfos> sessionHistory) {
         Map<String, Object> map = new HashMap<>();
         map.put(ContextBusKeys.STATE, state);
         map.put(ContextBusKeys.CHAIN_ACTOR, chainActor);
@@ -266,8 +266,8 @@ public class RegnexeAgent {
         if (marketplace != null) {
             map.put(ContextBusKeys.MARKETPLACE, marketplace);
         }
-        if (sessionSummary != null) {
-            map.put(ContextBusKeys.SESSION_SUMMARY, sessionSummary);
+        if (sessionHistory != null && !sessionHistory.isEmpty()) {
+            map.put(ContextBusKeys.SESSION_HISTORY, sessionHistory);
         }
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
         map.put(ContextBusKeys.MAX_CONTEXT_OUTPUT_CHARS, maxContextOutputChars);
@@ -294,7 +294,7 @@ public class RegnexeAgent {
 
     // ── Session memory helpers ───────────────────────────────────────────────
 
-    private String loadSessionSummary(String sessionId) {
+    private List<HistoryInfos> loadSessionHistory(String sessionId) {
         List<HistoryInfos> history;
         if (sessionMemory != null) {
             history = sessionMemory.readHistory();
@@ -306,27 +306,7 @@ public class RegnexeAgent {
         } else {
             return null;
         }
-        if (history == null || history.isEmpty()) return null;
-        return formatHistory(history);
-    }
-
-    private String formatHistory(List<HistoryInfos> history) {
-        StringBuilder sb = new StringBuilder();
-        for (HistoryInfos h : history) {
-            if (h.getType() == HistoryInfos.Type.SUMMARY) {
-                for (BaseMessage msg : h.getMessages()) {
-                    sb.append(msg.getContent()).append("\n");
-                }
-            } else {
-                for (BaseMessage msg : h.getMessages()) {
-                    String role = MessageType.HUMAN.getCode().equals(msg.getRole())
-                            ? "User" : "Assistant";
-                    sb.append(role).append(": ").append(msg.getContent()).append("\n");
-                }
-                sb.append("\n");
-            }
-        }
-        return sb.toString().trim();
+        return (history == null || history.isEmpty()) ? null : history;
     }
 
     private void storeSessionRound(String sessionId, String goal, String answer) {

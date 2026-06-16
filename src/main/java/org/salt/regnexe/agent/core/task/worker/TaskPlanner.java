@@ -16,7 +16,6 @@ package org.salt.regnexe.agent.core.task.worker;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.tuple.Pair;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
@@ -32,13 +31,16 @@ import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
+import org.salt.jlangchain.core.history.HistoryInfos;
 import org.salt.jlangchain.core.llm.BaseChatModel;
+import org.salt.jlangchain.core.message.BaseMessage;
+import org.salt.jlangchain.core.message.MessageType;
 import org.salt.jlangchain.core.parser.StrOutputParser;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
-import org.salt.jlangchain.core.prompt.chat.ChatPromptTemplate;
+import org.salt.jlangchain.core.prompt.value.ChatPromptValue;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -67,6 +69,9 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - EFFICIENCY: prefer the shortest execution path that achieves the goal. If a capability \
               description states it already returns or saves the needed data, do NOT add another capability \
               solely to re-read or re-save that same data.
+            - UNIQUE IDs: selectedCapabilityIds must contain each capability ID at most once. \
+              If the goal involves conditional retries (e.g. "if QC fails, retry"), list the capability \
+              once — the executor agent will call it again as needed based on the narrative.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
@@ -92,7 +97,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
         List<CapabilityCandidate> candidates = bus.getTransmit(ContextBusKeys.CANDIDATES);
-        String sessionSummary = bus.getTransmit(ContextBusKeys.SESSION_SUMMARY);
+        List<HistoryInfos> sessionHistory = bus.getTransmit(ContextBusKeys.SESSION_HISTORY);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
@@ -106,8 +111,8 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
                 "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
 
-        String userPrompt = buildPrompt(state, candidates, sessionSummary);
-        ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
+        ChatPromptValue prompt = buildChatPrompt(state, candidates, sessionHistory);
+        ChatGeneration result = chainActor.invoke(flow, prompt);
 
         PlanOutput plan = parsePlan(result.getText());
 
@@ -129,10 +134,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
     private FlowInstance buildFlow(ChainActor chainActor, BaseChatModel llm, Consumer<String> onLlm) {
         return chainActor.builder()
-                .next(ChatPromptTemplate.fromMessages(List.of(
-                        Pair.of("system", SYSTEM_PROMPT),
-                        Pair.of("human", "${prompt}")
-                )))
                 .next(input -> {
                     if (onLlm != null) onLlm.accept(input.toString());
                     return input;
@@ -142,54 +143,86 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 .build();
     }
 
-    private String buildPrompt(TaskExecutionState state,
-                               List<CapabilityCandidate> candidates,
-                               String sessionSummary) {
-        StringBuilder sb = new StringBuilder();
+    private ChatPromptValue buildChatPrompt(TaskExecutionState state,
+                                            List<CapabilityCandidate> candidates,
+                                            List<HistoryInfos> sessionHistory) {
+        List<BaseMessage> messages = new ArrayList<>();
 
-        if (sessionSummary != null && !sessionSummary.isBlank()) {
-            sb.append("== Session history ==\n").append(sessionSummary).append("\n\n");
+        // ── System message: SYSTEM_PROMPT + summary + capabilities ───────────
+        StringBuilder systemSb = new StringBuilder(SYSTEM_PROMPT);
+
+        if (sessionHistory != null) {
+            for (HistoryInfos h : sessionHistory) {
+                if (h.getType() == HistoryInfos.Type.SUMMARY) {
+                    for (BaseMessage msg : h.getMessages()) {
+                        systemSb.append("\n\n").append(msg.getContent());
+                    }
+                }
+            }
         }
 
-        sb.append("Goal: ").append(state.getRequest().getGoal()).append("\n\n");
-
-        String supplement = state.getRequest().getSupplementInput();
-        if (supplement != null && !supplement.isBlank()) {
-            sb.append("== User supplement ==\n").append(supplement).append("\n\n");
-        }
-
-        sb.append("Available capabilities:\n");
+        systemSb.append("\n\nAvailable capabilities:\n");
         if (candidates != null) {
-            candidates.forEach(c -> sb.append("- ").append(c.getCapabilityId())
+            candidates.forEach(c -> systemSb.append("- ").append(c.getCapabilityId())
                     .append(" (").append(c.getName()).append("): ")
                     .append(c.getDescription()).append("\n"));
         }
 
+        messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), systemSb.toString()));
+
+        // ── Human message: history (as formatted text) + goal + guidance ─────
+        // NORMAL history turns are injected as formatted reference text, NOT as
+        // actual Human/AI message pairs, to prevent the LLM from mimicking prior
+        // task results instead of producing a JSON plan.
+        StringBuilder humanSb = new StringBuilder();
+
+        if (sessionHistory != null) {
+            StringBuilder histSb = new StringBuilder();
+            for (HistoryInfos h : sessionHistory) {
+                if (h.getType() != HistoryInfos.Type.NORMAL) continue;
+                for (BaseMessage msg : h.getMessages()) {
+                    String role = MessageType.HUMAN.getCode().equals(msg.getRole()) ? "User" : "Assistant";
+                    histSb.append(role).append(": ").append(msg.getContent()).append("\n");
+                }
+                histSb.append("\n");
+            }
+            if (!histSb.isEmpty()) {
+                humanSb.append("== Session history (for context only) ==\n").append(histSb);
+            }
+        }
+
+        humanSb.append("Goal: ").append(state.getRequest().getGoal());
+
+        String supplement = state.getRequest().getSupplementInput();
+        if (supplement != null && !supplement.isBlank()) {
+            humanSb.append("\n\n== User supplement ==\n").append(supplement);
+        }
+
         ReflectionHint lastHint = lastHint(state);
         if (lastHint != null) {
-            sb.append("\nGuidance from previous round:\n");
+            humanSb.append("\n\nGuidance from previous round:");
             if (lastHint.getPlanAdjustment() != null) {
-                sb.append("- Adjustment: ").append(lastHint.getPlanAdjustment()).append("\n");
+                humanSb.append("\n- Adjustment: ").append(lastHint.getPlanAdjustment());
             }
             if (lastHint.getAvoidCapabilityIds() != null && !lastHint.getAvoidCapabilityIds().isEmpty()) {
-                sb.append("- Avoid: ").append(String.join(", ", lastHint.getAvoidCapabilityIds())).append("\n");
+                humanSb.append("\n- Avoid: ").append(String.join(", ", lastHint.getAvoidCapabilityIds()));
             }
             if (lastHint.getReason() != null) {
-                sb.append("- Reason: ").append(lastHint.getReason()).append("\n");
+                humanSb.append("\n- Reason: ").append(lastHint.getReason());
             }
         }
 
         List<RoundRecord> rounds = state.getRounds();
         if (rounds.size() > 1) {
-            sb.append("\nPrevious round summary:\n");
             RoundRecord prev = rounds.get(rounds.size() - 2);
             if (prev.getExecutionResult() != null && prev.getExecutionResult().getFinalText() != null) {
-                String text = prev.getExecutionResult().getFinalText();
-                sb.append(text).append("\n");
+                humanSb.append("\n\nPrevious round summary:\n").append(prev.getExecutionResult().getFinalText());
             }
         }
 
-        return sb.toString();
+        messages.add(BaseMessage.fromMessage(MessageType.HUMAN.getCode(), humanSb.toString()));
+
+        return ChatPromptValue.builder().messages(messages).build();
     }
 
     private PlanOutput parsePlan(String text) {

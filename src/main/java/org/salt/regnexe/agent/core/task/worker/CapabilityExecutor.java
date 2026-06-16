@@ -158,7 +158,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                      AgentEventListener listener, String taskId, int round, boolean verbose) {
         if (marketplace == null || capIds == null) return;
 
+        Set<String> seenCapIds = new HashSet<>();
         for (String capId : capIds) {
+            if (!seenCapIds.add(capId)) continue;  // skip duplicate capability registrations
             CapabilityDescriptor cap = marketplace.resolveDescriptor(capId);
             if (cap == null) {
                 log.warn("Capability not found: {}", capId);
