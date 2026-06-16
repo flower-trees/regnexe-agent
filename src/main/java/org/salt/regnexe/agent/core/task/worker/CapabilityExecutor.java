@@ -93,10 +93,10 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .skills(skills)
                 .subAgents(subAgents)
                 .context(agentContext)
-                .onLlm(text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
-                .onToolCall(tc -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc)))
-                .onObservation(obs -> listener.onEvent(AgentEvent.of(taskId, round, EventType.TOOL_RESULT, obs)))
-                .onTokenUsage(u -> listener.onEvent(AgentEvent.ofTokenUsage(taskId, round, u)));
+                .onLlm(text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
+                .onToolCall(tc -> listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc)))
+                .onObservation(obs -> listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT, obs)))
+                .onTokenUsage(u -> listener.dispatch(AgentEvent.ofTokenUsage(taskId, round, u)));
         if (maxAgentIterations != null) {
             executorBuilder.maxIterations(maxAgentIterations);
         }
@@ -104,24 +104,27 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         this.mcpAgentExecutor = executor;
 
+        listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_STARTED,
+                "Selected: " + selectedCapIds + " | " + narrative));
+
         ExecutionOutput output = new ExecutionOutput();
         try {
             ChatGeneration result = executor.invoke(buildAgentInput(narrative, inputDescs), stopSignal);
             output.setFinalText(result.getText());
             output.setStatus(ExecutionStatus.SUCCESS);
             bus.putTransmit(ContextBusKeys.EXEC_TEXT, result.getText());
-            listener.onEvent(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
+            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
                     "SUCCESS | " + result.getText()));
             log.debug("Round {}: execution succeeded", state.getCurrentRound());
         } catch (AgentStoppedException e) {
             output.setStatus(ExecutionStatus.STOPPED);
             state.setStatus(TaskStatus.PAUSED);
-            listener.onEvent(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED"));
+            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED"));
             log.debug("Round {}: execution paused", state.getCurrentRound());
         } catch (Exception e) {
             output.setStatus(ExecutionStatus.FAILED);
             output.setFinalText(e.getMessage());
-            listener.onEvent(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
+            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
                     "FAILED | " + e.getMessage()));
             log.warn("Round {}: execution failed: {}", state.getCurrentRound(), e.getMessage());
         } finally {
@@ -173,12 +176,18 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             sb.verbose(true);
                         } else {
                             String name = cap.getName();
-                            sb.onLlm(text -> listener.onEvent(
+                            sb.onLlm(text -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.SKILL_LLM_RESPONDED,
                                               "[skill:" + name + "] " + text)));
+                            sb.onToolCall(tc -> listener.dispatch(
+                                AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
+                                              "[skill:" + name + "] " + tc)));
+                            sb.onObservation(obs -> listener.dispatch(
+                                AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
+                                              "[skill:" + name + "] " + obs)));
                         }
                         String skillCapName = cap.getName();
-                        sb.onTokenUsage(u -> listener.onEvent(
+                        sb.onTokenUsage(u -> listener.dispatch(
                             AgentEvent.ofCapabilityTokenUsage(taskId, round, skillCapName, u)));
                         if (maxIterations != null) sb.maxIterations(maxIterations);
                         skills.add(sb.build());
@@ -209,12 +218,18 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             ab.verbose(true);
                         } else {
                             String name = cap.getName();
-                            ab.onLlm(text -> listener.onEvent(
+                            ab.onLlm(text -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.AGENT_LLM_RESPONDED,
                                               "[subagent:" + name + "] " + text)));
+                            ab.onToolCall(tc -> listener.dispatch(
+                                AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
+                                              "[subagent:" + name + "] " + tc)));
+                            ab.onObservation(obs -> listener.dispatch(
+                                AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
+                                              "[subagent:" + name + "] " + obs)));
                         }
                         String agentCapName = cap.getName();
-                        ab.onTokenUsage(u -> listener.onEvent(
+                        ab.onTokenUsage(u -> listener.dispatch(
                             AgentEvent.ofCapabilityTokenUsage(taskId, round, agentCapName, u)));
                         if (maxIterations != null) ab.maxIterations(maxIterations);
                         subAgents.add(ab.build());

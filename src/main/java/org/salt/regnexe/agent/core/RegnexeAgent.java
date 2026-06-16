@@ -144,7 +144,7 @@ public class RegnexeAgent {
         TaskExecutionState state = initState(request);
         taskStore.save(state);
 
-        eventListener.onEvent(AgentEvent.of(state.getTaskId(), 0, EventType.AGENT_STARTED,
+        eventListener.dispatch(AgentEvent.of(state.getTaskId(), 0, EventType.AGENT_STARTED,
                 "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds));
 
         String sessionSummary = loadSessionSummary(state.getSessionId());
@@ -170,7 +170,7 @@ public class RegnexeAgent {
             state.getRequest().setSupplementInput(supplementInput);
         }
 
-        eventListener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+        eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_STARTED,
                 "Resuming | rounds done: " + state.getCurrentRound()
                 + (supplementInput != null ? " | supplement: " + supplementInput : "")));
@@ -235,7 +235,7 @@ public class RegnexeAgent {
             storeSessionRound(state.getSessionId(), state.getRequest().getGoal(), finalText);
         }
 
-        eventListener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+        eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_COMPLETED,
                 "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()));
 

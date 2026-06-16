@@ -56,13 +56,13 @@ public class TokenAggregatingEventListener implements AgentEventListener {
         switch (event.getType()) {
             case TOKEN_USAGE, CAPABILITY_TOKEN_USAGE -> {
                 accumulate(event);
-                delegate.onEvent(event);
+                delegate.dispatch(event);
             }
             case AGENT_COMPLETED -> {
                 emitSummary(event.getTaskId(), event.getRound(), event.getTimestamp());
-                delegate.onEvent(event);
+                delegate.dispatch(event);
             }
-            default -> delegate.onEvent(event);
+            default -> delegate.dispatch(event);
         }
     }
 
@@ -121,7 +121,7 @@ public class TokenAggregatingEventListener implements AgentEventListener {
         long elapsedMs = (startTime != null && completedAt > 0) ? (completedAt - startTime) : 0;
         long totalLlmMs = durations != null ? durations.values().stream().mapToLong(Long::longValue).sum() : 0;
 
-        delegate.onEvent(AgentEvent.ofTaskTokenSummary(
+        delegate.dispatch(AgentEvent.ofTaskTokenSummary(
                 taskId, round, total, modelMap, elapsedMs, totalLlmMs,
                 durations != null ? durations : Map.of()));
     }

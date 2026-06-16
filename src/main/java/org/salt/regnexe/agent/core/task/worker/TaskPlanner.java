@@ -99,7 +99,12 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         String taskId = state.getTaskId();
         int round = state.getCurrentRound();
         FlowInstance flow = buildFlow(chainActor, llm,
-                text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
+                text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
+
+        String candidateNames = candidates == null ? "" : candidates.stream()
+                .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
+        listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
+                "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
 
         String userPrompt = buildPrompt(state, candidates, sessionSummary);
         ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
@@ -113,7 +118,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         currentRound(state).setPlan(plan);
         state.setUpdatedAt(System.currentTimeMillis());
 
-        listener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
+        listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
                 "Selected: " + plan.getSelectedCapabilityIds() + " | " + plan.getNarrative()));
         log.debug("Round {}: plan produced, selected caps: {}",
                 state.getCurrentRound(), plan.getSelectedCapabilityIds());

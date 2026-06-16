@@ -70,6 +70,11 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
                 query.setReflectionHint(lastHint.getSearchDirection());
             }
 
+            listener.dispatch(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_STARTED,
+                    "Goal: " + state.getRequest().getGoal()
+                    + (lastHint != null && lastHint.getSearchDirection() != null
+                       ? " | hint: " + lastHint.getSearchDirection() : "")));
+
             CapabilitySearchResult result = marketplace.search(query);
 
             if (state.getSearchResults() == null) {
@@ -82,7 +87,7 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
 
             String names = result.getCandidates().stream()
                     .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
-            listener.onEvent(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
+            listener.dispatch(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
                     "Found " + result.getCandidates().size() + " capabilities: " + names));
             log.debug("Round {}: searched, found {} candidates",
                     roundNumber, result.getCandidates().size());
@@ -95,7 +100,7 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
                     : List.of();
             bus.putTransmit(ContextBusKeys.CANDIDATES, lastCandidates);
 
-            listener.onEvent(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
+            listener.dispatch(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
                     "Reusing cached capabilities (version " + lastVersion + ")"));
             log.debug("Round {}: skipped search, reusing version {}", roundNumber, lastVersion);
         }
