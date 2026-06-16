@@ -21,22 +21,22 @@ public class ConsoleEventListener implements AgentEventListener {
 
     protected String format(AgentEvent event) {
         String prefix = switch (event.getType()) {
-            case AGENT_STARTED        -> "[Agent         ]";
-            case SEARCH_COMPLETED     -> "[Search        ]";
-            case PLAN_COMPLETED       -> "[Plan          ]";
-            case TOOL_CALLED          -> "[Execute Call  ]";
-            case TOOL_RESULT          -> "[Execute Result]";
-            case LLM_RESPONDED        -> "[Execute LLM   ]";
+            case AGENT_STARTED        -> "[Agent Start   ]";
+            case SEARCH_COMPLETED     -> "[Search Result ]";
             case PLAN_LLM_RESPONDED   -> "[Plan LLM      ]";
+            case PLAN_COMPLETED       -> "[Plan Result   ]";
+            case TOOL_CALLED          -> "[TOOL Call     ]";
+            case SKILL_LLM_RESPONDED  -> "[TOOL Skill LLM]";
+            case AGENT_LLM_RESPONDED  -> "[TOOL SubAgent LLM]";
+            case TOOL_RESULT          -> "[TOOL Result   ]";
+            case LLM_RESPONDED        -> "[Execute LLM   ]";
+            case EXECUTION_COMPLETED  -> "[Execute Result]";
             case REFLECT_LLM_RESPONDED-> "[Reflect LLM   ]";
-            case SKILL_LLM_RESPONDED  -> "[Skill LLM     ]";
-            case AGENT_LLM_RESPONDED  -> "[SubAgent LLM  ]";
-            case EXECUTION_COMPLETED  -> "[Execute       ]";
-            case REFLECTION_COMPLETED -> "[Reflect       ]";
-            case AGENT_COMPLETED      -> "[Done          ]";
+            case REFLECTION_COMPLETED -> "[Reflect Result]";
+            case AGENT_COMPLETED      -> "[Agent Done    ]";
             case TOKEN_USAGE          -> "[Token Usage   ]";
             case CAPABILITY_TOKEN_USAGE -> "[Cap Token Usage]";
-            case TASK_TOKEN_SUMMARY    -> "[Task Token     ]";
+            case TASK_TOKEN_SUMMARY    -> "[Task Token Usage]";
         };
         return String.format("%s R%d %s", prefix, event.getRound(), event.getText());
     }
