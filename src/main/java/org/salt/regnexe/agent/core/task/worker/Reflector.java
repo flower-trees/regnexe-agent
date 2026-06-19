@@ -97,6 +97,9 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         String execText = bus.getTransmit(ContextBusKeys.EXEC_TEXT);
+        if ((execText == null || execText.isBlank()) && state.getLastToolResult() != null) {
+            execText = state.getLastToolResult();
+        }
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
         String taskId = state.getTaskId();

@@ -81,12 +81,14 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         int round = state.getCurrentRound();
         String taskId = state.getTaskId();
+        state.setLastToolResult(null);
 
         List<Tool> mcpTools = new ArrayList<>();
         List<Skill> skills = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skills, subAgents,
                 maxAgentIterations, listener, taskId, round, verbose);
+        boolean returnLastToolResult = shouldReturnLastToolResult(marketplace, selectedCapIds);
         McpAgentExecutor.Builder executorBuilder = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
                 .tools(mcpTools)
@@ -95,7 +97,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .context(agentContext)
                 .onLlm(text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
                 .onToolCall(tc -> listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc)))
-                .onObservation(obs -> listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT, obs)))
+                .onObservation(obs -> {
+                    state.setLastToolResult(obs);
+                    listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT, obs));
+                })
+                .returnLastToolResult(returnLastToolResult)
                 .onTokenUsage(u -> listener.dispatch(AgentEvent.ofTokenUsage(taskId, round, u)));
         if (maxAgentIterations != null) {
             executorBuilder.maxIterations(maxAgentIterations);
@@ -112,11 +118,12 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         ExecutionOutput output = new ExecutionOutput();
         try {
             ChatGeneration result = executor.invoke(agentInput, stopSignal);
-            output.setFinalText(result.getText());
+            String executionText = state.getLastToolResult() != null ? state.getLastToolResult() : result.getText();
+            output.setFinalText(executionText);
             output.setStatus(ExecutionStatus.SUCCESS);
-            bus.putTransmit(ContextBusKeys.EXEC_TEXT, result.getText());
+            bus.putTransmit(ContextBusKeys.EXEC_TEXT, executionText);
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
-                    "SUCCESS | " + result.getText()));
+                    "SUCCESS | " + executionText));
             log.debug("Round {}: execution succeeded", state.getCurrentRound());
         } catch (AgentStoppedException e) {
             output.setStatus(ExecutionStatus.STOPPED);
@@ -137,6 +144,26 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         state.setUpdatedAt(System.currentTimeMillis());
         if (taskStore != null) taskStore.save(state);
         return null;
+    }
+
+    private boolean shouldReturnLastToolResult(Marketplace marketplace, List<String> selectedCapIds) {
+        if (marketplace == null || selectedCapIds == null || selectedCapIds.isEmpty()) {
+            return false;
+        }
+        Set<String> inheritedTools = new HashSet<>();
+        Set<String> primarySelections = new HashSet<>(selectedCapIds);
+        for (String capId : selectedCapIds) {
+            CapabilityDescriptor cap = marketplace.resolveDescriptor(capId);
+            if (cap == null) continue;
+            if (cap.getSkillConfig() != null && cap.getSkillConfig().getAllowedTools() != null) {
+                inheritedTools.addAll(cap.getSkillConfig().getAllowedTools());
+            }
+            if (cap.getSubAgentConfig() != null && cap.getSubAgentConfig().getAllowedTools() != null) {
+                inheritedTools.addAll(cap.getSubAgentConfig().getAllowedTools());
+            }
+        }
+        primarySelections.removeAll(inheritedTools);
+        return primarySelections.size() == 1;
     }
 
     private String buildAgentInput(String goal, String narrative, Map<String, String> inputDescs) {

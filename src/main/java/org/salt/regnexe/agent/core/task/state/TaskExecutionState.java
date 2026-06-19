@@ -56,6 +56,13 @@ public class TaskExecutionState {
     private List<RoundRecord> rounds;
 
     /**
+     * Last top-level tool result produced by the current execution.
+     * Used when execution delegates to a skill/sub-agent and the raw tool result
+     * should be reflected/composed without a second LLM rewrite.
+     */
+    private String lastToolResult;
+
+    /**
      * Reference to the Context in ContextManager; not embedded inline
      */
     private String contextId;
