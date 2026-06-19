@@ -91,9 +91,16 @@ public class Example02ContractAnalyzerTest {
                         You are a professional legal contract risk analysis assistant.
                         The user will provide contract clauses. You need to:
                         1. Call the analyze_clause tool for each key clause.
-                        2. Summarize all clause risk levels (high/medium/low).
-                        3. Provide an overall risk assessment and revision advice.
-                        Answer in English with clear structure.
+                        2. Return a concise fixed-format summary only.
+                        Output rules:
+                        - Maximum 120 words total.
+                        - Do not use markdown tables.
+                        - Do not add legal theory or background.
+                        - Do not repeat the full clause text.
+                        - For each clause, use exactly one line:
+                          Clause N: Risk=<High/Medium/Low>; Issue=<one short sentence>; Advice=<one short sentence>.
+                        - End with exactly one line:
+                          Overall: <one short sentence>.
                         """)
                 .allowedTools(List.of("analyze_clause"))
                 .build();

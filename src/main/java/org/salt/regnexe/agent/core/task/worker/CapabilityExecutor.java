@@ -150,6 +150,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             inputDescs.forEach((id, desc) ->
                     sb.append("- ").append(id).append(": ").append(desc).append("\n"));
         }
+        sb.append("\n\nFinal answer rule:\n")
+                .append("Be concise. Do not expand, reformat, or add extra detail beyond the selected capability result unless the user explicitly asks for detail.");
         return sb.toString();
     }
 
