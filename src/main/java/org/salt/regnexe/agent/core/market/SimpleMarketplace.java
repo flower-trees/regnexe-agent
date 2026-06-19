@@ -82,6 +82,7 @@ public class SimpleMarketplace implements Marketplace {
                 c.setType(cap.getType());
                 c.setName(cap.getName());
                 c.setDescription(cap.getDescription());
+                c.setAllowedTools(allowedTools(cap));
                 c.setScore(1.0);
                 candidates.add(c);
             }
@@ -92,6 +93,20 @@ public class SimpleMarketplace implements Marketplace {
         result.setSearchStrategy("full_scan");
         result.setSearchedAt(System.currentTimeMillis());
         return result;
+    }
+
+    private List<String> allowedTools(CapabilityDescriptor cap) {
+        if (cap.getSkillConfig() != null) {
+            return cap.getSkillConfig().getAllowedTools() != null
+                    ? cap.getSkillConfig().getAllowedTools()
+                    : List.of();
+        }
+        if (cap.getSubAgentConfig() != null) {
+            return cap.getSubAgentConfig().getAllowedTools() != null
+                    ? cap.getSubAgentConfig().getAllowedTools()
+                    : List.of();
+        }
+        return List.of();
     }
 
     @Override

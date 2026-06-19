@@ -28,7 +28,6 @@ import org.salt.regnexe.agent.core.market.SimpleMarketplace;
 import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
-import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,9 +55,6 @@ public class Example03TravelPlannerTest {
 
     @Autowired
     private RegnexeAgentBuilder regnexeAgentBuilder;
-
-    @Autowired
-    private ChainActor chainActor;
 
     @Test
     public void travelItineraryShouldFinish() {
@@ -110,6 +106,7 @@ public class Example03TravelPlannerTest {
                         4. Include morning attraction, lunch, afternoon attraction, and dinner for each day.
                         Answer in English with one section per day.
                         """)
+                .ownTools(List.of(attractionsTool, restaurantsTool))
                 .build();
 
         // ── Marketplace ──────────────────────────────────────────────────────
@@ -120,7 +117,6 @@ public class Example03TravelPlannerTest {
                 .type(CapabilityType.SUB_AGENT)
                 .tags(List.of("travel", "planning", "chengdu"))
                 .subAgentConfig(subAgentConfig)
-                .ownTools(List.of(attractionsTool, restaurantsTool))
                 .build();
         Assert.assertEquals(travelCap.getSubAgentConfig().getName(), travelCap.getName());
         Assert.assertEquals(travelCap.getSubAgentConfig().getDescription(), travelCap.getDescription());

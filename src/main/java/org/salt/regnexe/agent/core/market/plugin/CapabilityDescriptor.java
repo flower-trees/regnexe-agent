@@ -61,13 +61,6 @@ public class CapabilityDescriptor {
     private SubAgentConfig subAgentConfig;
 
     /**
-     * Private tools injected directly into the SubAgent's own tool registry.
-     * These are never exposed to the master LLM and do not appear in the marketplace.
-     * Skills always inherit the master tool set and must not define private tools.
-     */
-    private List<Tool> ownTools;
-
-    /**
      * Extra kwargs passed to the SubAgent LLM builder when this capability's model is
      * resolved (e.g. temperature, thinking). Null = provider defaults.
      * Skills always inherit the master LLM and must not define model kwargs.
@@ -89,7 +82,6 @@ public class CapabilityDescriptor {
         private Tool tool;
         private SkillConfig skillConfig;
         private SubAgentConfig subAgentConfig;
-        private List<Tool> ownTools;
         private java.util.Map<String, Object> modelKwargs;
 
         public CapabilityDescriptorBuilder capabilityId(String capabilityId) {
@@ -137,11 +129,6 @@ public class CapabilityDescriptor {
             return this;
         }
 
-        public CapabilityDescriptorBuilder ownTools(List<Tool> ownTools) {
-            this.ownTools = ownTools;
-            return this;
-        }
-
         public CapabilityDescriptorBuilder modelKwargs(java.util.Map<String, Object> modelKwargs) {
             this.modelKwargs = modelKwargs;
             return this;
@@ -168,21 +155,15 @@ public class CapabilityDescriptor {
             descriptor.setTool(tool);
             descriptor.setSkillConfig(skillConfig);
             descriptor.setSubAgentConfig(subAgentConfig);
-            descriptor.setOwnTools(ownTools);
             descriptor.setModelKwargs(modelKwargs);
             return descriptor;
         }
 
         private void validate() {
-            if (type == CapabilityType.SKILL
-                    && (tool != null || hasOwnTools() || modelKwargs != null)) {
+            if (type == CapabilityType.SKILL && (tool != null || modelKwargs != null)) {
                 throw new IllegalArgumentException(
-                        "SKILL capabilities must inherit tools and LLM; do not set tool, ownTools, or modelKwargs.");
+                        "SKILL capabilities must inherit tools and LLM; do not set tool or modelKwargs.");
             }
-        }
-
-        private boolean hasOwnTools() {
-            return ownTools != null && !ownTools.isEmpty();
         }
 
         private static boolean isBlank(String value) {

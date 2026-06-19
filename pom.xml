@@ -40,7 +40,7 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <j.langchain.version>1.0.17</j.langchain.version>
+    <j.langchain.version>1.0.18-SNAPSHOT</j.langchain.version>
     <lombok.version>1.18.24</lombok.version>
   </properties>
 

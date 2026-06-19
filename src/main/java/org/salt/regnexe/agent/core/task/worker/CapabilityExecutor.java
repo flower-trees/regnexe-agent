@@ -104,12 +104,14 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         this.mcpAgentExecutor = executor;
 
+        String agentInput = buildAgentInput(state.getRequest().getGoal(), narrative, inputDescs);
+
         listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_STARTED,
-                "Selected: " + selectedCapIds + " | " + narrative));
+                "Selected: " + selectedCapIds + " | " + agentInput));
 
         ExecutionOutput output = new ExecutionOutput();
         try {
-            ChatGeneration result = executor.invoke(buildAgentInput(narrative, inputDescs), stopSignal);
+            ChatGeneration result = executor.invoke(agentInput, stopSignal);
             output.setFinalText(result.getText());
             output.setStatus(ExecutionStatus.SUCCESS);
             bus.putTransmit(ContextBusKeys.EXEC_TEXT, result.getText());
@@ -137,12 +139,17 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         return null;
     }
 
-    private String buildAgentInput(String narrative, Map<String, String> inputDescs) {
-        if (inputDescs == null || inputDescs.isEmpty()) return narrative;
-        StringBuilder sb = new StringBuilder(narrative)
-                .append("\n\nCapability input guidance:\n");
-        inputDescs.forEach((id, desc) ->
-                sb.append("- ").append(id).append(": ").append(desc).append("\n"));
+    private String buildAgentInput(String goal, String narrative, Map<String, String> inputDescs) {
+        StringBuilder sb = new StringBuilder();
+        if (goal != null && !goal.isBlank()) {
+            sb.append("Original goal:\n").append(goal).append("\n\n");
+        }
+        sb.append("Execution plan:\n").append(narrative != null ? narrative : "");
+        if (inputDescs != null && !inputDescs.isEmpty()) {
+            sb.append("\n\nCapability input guidance:\n");
+            inputDescs.forEach((id, desc) ->
+                    sb.append("- ").append(id).append(": ").append(desc).append("\n"));
+        }
         return sb.toString();
     }
 
@@ -208,8 +215,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                 return llmProvider.provide(spec);
                             });
                         }
-                        if (cap.getOwnTools() != null && !cap.getOwnTools().isEmpty()) {
-                            ab.tools(cap.getOwnTools());
+                        if (cfg.getOwnTools() != null && !cfg.getOwnTools().isEmpty()) {
+                            ab.tools(cfg.getOwnTools());
                         }
                         if (verbose) {
                             ab.verbose(true);

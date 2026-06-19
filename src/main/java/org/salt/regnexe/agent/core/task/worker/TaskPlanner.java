@@ -40,7 +40,9 @@ import org.salt.jlangchain.core.parser.generation.ChatGeneration;
 import org.salt.jlangchain.core.prompt.value.ChatPromptValue;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -58,6 +60,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - Select only capabilities that are genuinely relevant to the goal.
             - The narrative should be clear, actionable instructions for the executor.
             - CRITICAL: every capability name you mention in the narrative MUST also appear in selectedCapabilityIds.
+            - TOOL DEPENDENCIES: If a selected SKILL or SUB_AGENT lists allowedTools, you MUST also include each \
+              allowed tool id in selectedCapabilityIds. These tools are inherited dependencies for that capability; \
+              include them so the executor can make them available, but do not present them as separate top-level \
+              user tasks unless the user explicitly asked to call them directly.
             - For each selected capability, write a focused input description in capabilityInputDescriptions: \
               describe what context to pass when invoking it (e.g. user goal, specific data, or the output \
               of a preceding capability). Be specific — the executor uses these descriptions to construct \
@@ -115,6 +121,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         ChatGeneration result = chainActor.invoke(flow, prompt);
 
         PlanOutput plan = parsePlan(result.getText());
+        expandSelectedAllowedTools(plan, candidates);
 
         bus.putTransmit(ContextBusKeys.PLAN_NARRATIVE, plan.getNarrative());
         bus.putTransmit(ContextBusKeys.SELECTED_CAPS, plan.getSelectedCapabilityIds());
@@ -165,7 +172,9 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         if (candidates != null) {
             candidates.forEach(c -> systemSb.append("- ").append(c.getCapabilityId())
                     .append(" (").append(c.getName()).append("): ")
-                    .append(c.getDescription()).append("\n"));
+                    .append(c.getDescription())
+                    .append(formatAllowedTools(c))
+                    .append("\n"));
         }
 
         messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), systemSb.toString()));
@@ -242,6 +251,25 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 return fallback;
             }
         }
+    }
+
+    private void expandSelectedAllowedTools(PlanOutput plan, List<CapabilityCandidate> candidates) {
+        if (plan == null || plan.getSelectedCapabilityIds() == null || candidates == null) return;
+
+        Set<String> selected = new LinkedHashSet<>(plan.getSelectedCapabilityIds());
+        for (CapabilityCandidate candidate : candidates) {
+            if (!selected.contains(candidate.getCapabilityId())) continue;
+            if (candidate.getAllowedTools() == null || candidate.getAllowedTools().isEmpty()) continue;
+            selected.addAll(candidate.getAllowedTools());
+        }
+        plan.setSelectedCapabilityIds(new ArrayList<>(selected));
+    }
+
+    private String formatAllowedTools(CapabilityCandidate candidate) {
+        if (candidate.getAllowedTools() == null || candidate.getAllowedTools().isEmpty()) {
+            return "";
+        }
+        return " | allowedTools: " + String.join(", ", candidate.getAllowedTools());
     }
 
     private String extractJson(String text) {

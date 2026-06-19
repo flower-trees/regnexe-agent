@@ -163,6 +163,7 @@ public class Example04BusinessTripAssistantTest {
                         3. Output a three-day itinerary with morning, afternoon, and evening sections.
                         Note: Use the user's weather information to schedule outdoor activities appropriately.
                         """)
+                .ownTools(List.of(attractionsTool, restaurantsTool))
                 .build();
 
         // ── Marketplace: 3 plugins, 3 capability types ───────────────────────
@@ -216,7 +217,6 @@ public class Example04BusinessTripAssistantTest {
                                 .type(CapabilityType.SUB_AGENT)
                                 .tags(List.of("travel", "planning"))
                                 .subAgentConfig(travelAgentConfig)
-                                .ownTools(List.of(attractionsTool, restaurantsTool))
                                 .build()))
                 .build();
 
