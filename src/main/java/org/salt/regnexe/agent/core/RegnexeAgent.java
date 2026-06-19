@@ -232,7 +232,10 @@ public class RegnexeAgent {
         String finalText = resultComposer.compose(state, lastDecision);
 
         if (state.getStatus() == TaskStatus.FINISHED || state.getStatus() == TaskStatus.ESCALATED) {
-            storeSessionRound(state.getSessionId(), state.getRequest().getGoal(), finalText);
+            String displayGoal = state.getRequest().getDisplayGoal();
+            String humanTurn = (displayGoal != null && !displayGoal.isBlank())
+                    ? displayGoal : state.getRequest().getGoal();
+            storeSessionRound(state.getSessionId(), humanTurn, finalText);
         }
 
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
