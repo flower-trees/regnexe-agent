@@ -12,23 +12,23 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core;
+package org.salt.regnexe.agent.core.example;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.salt.regnexe.agent.core.RegnexeAgent;
+import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
+import org.salt.regnexe.agent.core.TestApplication;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
-import org.salt.regnexe.agent.core.llm.DefaultModelProvider;
-import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.llm.Vendor;
 import org.salt.regnexe.agent.core.market.SimpleMarketplace;
 import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.salt.jlangchain.core.ChainActor;
-import org.salt.jlangchain.core.subagent.SubAgent;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,11 +38,11 @@ import org.springframework.test.context.junit4.SpringRunner;
 import java.util.List;
 
 /**
- * M0 smoke test: travel itinerary planning using a SubAgent capability.
+ * Example 03: travel itinerary planning using a SubAgent capability.
  *
  * Scenario
  * --------
- * Goal     : 规划成都3日游行程
+ * Goal     : plan a three-day Chengdu itinerary
  * SubAgent : travel_planner — autonomous agent with attractions + restaurant tools
  * Expect   : agent finishes with FINISHED status and a non-empty itinerary
  *
@@ -52,7 +52,7 @@ import java.util.List;
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
-public class TravelPlannerTest {
+public class Example03TravelPlannerTest {
 
     @Autowired
     private RegnexeAgentBuilder regnexeAgentBuilder;
@@ -67,55 +67,49 @@ public class TravelPlannerTest {
 
         Tool attractionsTool = Tool.builder()
                 .name("get_attractions")
-                .description("获取指定城市的热门景点列表。输入城市名称和主题（文化/美食/自然）。")
-                .params("city: String -- 城市名称; theme: String -- 主题（文化/美食/自然）")
+                .description("Gets popular attractions for a given city and theme.")
+                .params("city: String -- city name; theme: String -- theme (culture/food/nature)")
                 .func(input -> {
                     String text = input != null ? input.toString().toLowerCase() : "";
-                    if (text.contains("文化")) {
-                        return "成都文化景点：\n1. 武侯祠（三国文化，建议2小时）\n" +
-                               "2. 宽窄巷子（清代建筑群，建议1.5小时）\n3. 杜甫草堂（诗圣故居，建议1小时）";
+                    if (text.contains("culture")) {
+                        return "Chengdu cultural attractions:\n1. Wuhou Shrine (Three Kingdoms culture, 2 hours)\n" +
+                               "2. Kuanzhai Alley (Qing-era architecture, 1.5 hours)\n3. Du Fu Thatched Cottage (poet's former residence, 1 hour)";
                     }
-                    if (text.contains("自然")) {
-                        return "成都自然景点：\n1. 青城山（道教名山，建议半天）\n" +
-                               "2. 都江堰（世界遗产水利工程，建议3小时）\n3. 龙泉山城市森林公园（赏花观景，建议2小时）";
+                    if (text.contains("nature")) {
+                        return "Chengdu nature attractions:\n1. Mount Qingcheng (Taoist mountain, half day)\n" +
+                               "2. Dujiangyan (World Heritage irrigation system, 3 hours)\n3. Longquan Mountain Urban Forest Park (views and flowers, 2 hours)";
                     }
-                    return "成都热门景点：\n1. 大熊猫繁育研究基地（建议上午9点前入园，3小时）\n" +
-                           "2. 锦里古街（民俗文化，建议1.5小时）\n3. 天府广场（城市中心，建议1小时）";
+                    return "Chengdu popular attractions:\n1. Chengdu Research Base of Giant Panda Breeding (enter before 9 AM, 3 hours)\n" +
+                           "2. Jinli Ancient Street (folk culture, 1.5 hours)\n3. Tianfu Square (city center, 1 hour)";
                 })
                 .build();
 
         Tool restaurantsTool = Tool.builder()
                 .name("get_restaurants")
-                .description("获取指定城市的特色餐厅和美食推荐。输入城市名称。")
-                .params("city: String -- 城市名称")
-                .func(city -> "成都特色美食推荐：\n" +
-                        "早餐：赖汤圆（总府路店）— 老字号糯米汤圆，人均15元\n" +
-                        "午餐：廖记棒棒鸡（春熙路店）— 正宗川味，人均45元\n" +
-                        "晚餐：大龙燚火锅（建设路总店）— 成都最受欢迎火锅，人均80元，建议提前排号\n" +
-                        "夜宵：玉林串串香 — 人均30元，本地人最爱")
+                .description("Gets signature restaurants and food recommendations for a given city.")
+                .params("city: String -- city name")
+                .func(city -> "Chengdu food recommendations:\n" +
+                        "Breakfast: Lai Tangyuan (Zongfu Road), classic glutinous rice balls, CNY 15 per person\n" +
+                        "Lunch: Liaoji Bon Bon Chicken (Chunxi Road), authentic Sichuan flavor, CNY 45 per person\n" +
+                        "Dinner: Dalongyi Hotpot (Jianshe Road), popular Chengdu hotpot, CNY 80 per person, queue early\n" +
+                        "Late-night snack: Yulin Chuanchuan, CNY 30 per person, local favorite")
                 .build();
 
         // ── SubAgent: travel_planner ──────────────────────────────────────────
 
         SubAgentConfig subAgentConfig = SubAgentConfig.builder()
                 .name("travel_planner")
-                .description("成都旅行行程规划专家。给定旅行天数和偏好，自主查询景点和美食，输出详细的每日行程。" +
-                             "TRIGGER: 当用户需要规划旅行行程、景点推荐、餐厅推荐时使用。")
+                .description("Chengdu travel itinerary planner. Given trip length and preferences, it looks up attractions and food and outputs a detailed daily itinerary. " +
+                             "TRIGGER: Use when the user needs travel planning, attraction recommendations, or restaurant recommendations.")
                 .systemPrompt("""
-                        你是一个专业的成都旅行规划师。
-                        用户会告诉你旅行天数和偏好，你需要：
-                        1. 调用 get_attractions 获取各主题景点（文化/自然/综合）
-                        2. 调用 get_restaurants 获取餐厅推荐
-                        3. 按天规划合理的行程，注意景点距离和游览时间
-                        4. 每天包含：上午景点、午餐、下午景点、晚餐安排
-                        请用中文输出，格式清晰，每天一个板块。
+                        You are a professional Chengdu travel planner.
+                        The user will provide trip length and preferences. You need to:
+                        1. Call get_attractions for each theme (culture/nature/general).
+                        2. Call get_restaurants for restaurant recommendations.
+                        3. Plan a reasonable daily itinerary, considering distance and visit duration.
+                        4. Include morning attraction, lunch, afternoon attraction, and dinner for each day.
+                        Answer in English with one section per day.
                         """)
-                .build();
-
-        SubAgent travelAgent = SubAgent.from(subAgentConfig, chainActor)
-                .llm(new DefaultModelProvider().provide(ModelSpec.of(Vendor.ALIYUN, "deepseek-v4-flash")))
-                .tools(attractionsTool, restaurantsTool)
-                .verbose(true)
                 .build();
 
         // ── Marketplace ──────────────────────────────────────────────────────
@@ -124,17 +118,18 @@ public class TravelPlannerTest {
                 .capabilityId("travel_planner")
                 .pluginId("travel-plugin")
                 .type(CapabilityType.SUB_AGENT)
-                .name("travel_planner")
-                .description("成都旅行行程规划专家。给定旅行天数和偏好，自主规划每日行程，包含景点和餐厅。")
                 .tags(List.of("travel", "planning", "chengdu"))
-                .tool(travelAgent.asTool())
+                .subAgentConfig(subAgentConfig)
+                .ownTools(List.of(attractionsTool, restaurantsTool))
                 .build();
+        Assert.assertEquals(travelCap.getSubAgentConfig().getName(), travelCap.getName());
+        Assert.assertEquals(travelCap.getSubAgentConfig().getDescription(), travelCap.getDescription());
 
         PluginDescriptor travelPlugin = PluginDescriptor.builder()
                 .pluginId("travel-plugin")
                 .version("1.0")
                 .name("Travel Plugin")
-                .description("旅行规划插件")
+                .description("Travel planning plugin")
                 .capabilities(List.of(travelCap))
                 .build();
 
@@ -153,7 +148,7 @@ public class TravelPlannerTest {
         // ── Execute ──────────────────────────────────────────────────────────
 
         AgentResult result = agent.execute(
-                "帮我规划一个成都3日游：第1天文化古迹，第2天自然风光，第3天美食体验，请给出详细的每日行程安排。");
+                "Plan a three-day Chengdu trip: day 1 for cultural sites, day 2 for nature, and day 3 for food. Provide a detailed daily itinerary.");
 
         System.out.println("\n========== TravelPlanner Result ==========");
         System.out.println("Status    : " + result.getStatus());

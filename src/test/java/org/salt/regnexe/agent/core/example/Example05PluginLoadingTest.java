@@ -12,11 +12,14 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core;
+package org.salt.regnexe.agent.core.example;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.salt.regnexe.agent.core.RegnexeAgent;
+import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
+import org.salt.regnexe.agent.core.TestApplication;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
@@ -26,7 +29,7 @@ import org.salt.regnexe.agent.core.market.SimpleMarketplace;
 import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.market.plugin.Plugin;
 import org.salt.regnexe.agent.core.task.AgentResult;
-import org.salt.regnexe.agent.core.testplugins.WeatherPlugin;
+import org.salt.regnexe.agent.core.example.testplugins.WeatherPlugin;
 import org.salt.jlangchain.rag.tools.annotation.AgentTool;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,7 +41,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Plugin loading smoke tests — covers all three loading paths.
+ * Example 05: plugin loading smoke tests. Covers all three loading paths.
  *
  * Test 1 — registerBeanShouldLoadDescriptors (unit)
  *   register() scans @AgentTool methods and creates MCP_TOOL descriptors.
@@ -72,7 +75,7 @@ import java.util.List;
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
-public class PluginLoadingTest {
+public class Example05PluginLoadingTest {
 
     @Autowired
     private RegnexeAgentBuilder regnexeAgentBuilder;
@@ -216,7 +219,7 @@ public class PluginLoadingTest {
                 .withMaxRounds(3)
                 .build();
 
-        AgentResult result = agent.execute("查询北京今天的天气，告诉我是否适合户外跑步");
+        AgentResult result = agent.execute("Check today's weather in Beijing and tell me whether it is suitable for outdoor running.");
 
         System.out.println("\n========== register() Agent Result ==========");
         System.out.println("Status : " + result.getStatus());
@@ -245,7 +248,7 @@ public class PluginLoadingTest {
                     .withMaxRounds(3)
                     .build();
 
-            AgentResult result = agent.execute("查询北京今天的天气，告诉我是否适合户外跑步");
+            AgentResult result = agent.execute("Check today's weather in Beijing and tell me whether it is suitable for outdoor running.");
 
             System.out.println("\n========== dir plugin Agent Result ==========");
             System.out.println("Status : " + result.getStatus());
@@ -272,7 +275,7 @@ public class PluginLoadingTest {
                 .withMaxRounds(3)
                 .build();
 
-        AgentResult result = agent.execute("查询北京今天的天气，告诉我是否适合户外跑步");
+        AgentResult result = agent.execute("Check today's weather in Beijing and tell me whether it is suitable for outdoor running.");
 
         System.out.println("\n========== withScanPackages() Agent Result ==========");
         System.out.println("Status : " + result.getStatus());
@@ -298,7 +301,7 @@ public class PluginLoadingTest {
                     .withMaxRounds(3)
                     .build();
 
-            AgentResult result = agent.execute("查询北京今天的天气，告诉我是否适合户外跑步");
+            AgentResult result = agent.execute("Check today's weather in Beijing and tell me whether it is suitable for outdoor running.");
 
             System.out.println("\n========== withDirectory() Agent Result ==========");
             System.out.println("Status : " + result.getStatus());
@@ -343,7 +346,7 @@ public class PluginLoadingTest {
             "pluginId: dir-weather-plugin\n" +
             "name: Dir Weather Plugin\n" +
             "version: 1.0\n" +
-            "description: 目录加载的天气查询插件\n" +
+            "description: Directory-loaded weather query plugin\n" +
             "tags: [weather, test]\n");
 
         // tools/get_weather.sh + sidecar
@@ -351,10 +354,10 @@ public class PluginLoadingTest {
         Files.createDirectories(toolsDir);
         Files.writeString(toolsDir.resolve("get_weather.sh"),
             "#!/bin/bash\n" +
-            "echo '北京今日：晴，22°C，空气优良，非常适合户外跑步。'\n");
+            "echo 'Beijing today: sunny, 22°C, excellent air quality, very suitable for outdoor running.'\n");
         Files.writeString(toolsDir.resolve("get_weather.yaml"),
-            "description: 获取指定城市今天的天气，包括温度和运动建议\n" +
-            "params: \"city: String -- 城市名称\"\n" +
+            "description: Gets today's weather for a given city, including temperature and exercise advice\n" +
+            "params: \"city: String -- city name\"\n" +
             "tags: [weather]\n");
 
         if (withSkill) {
@@ -363,10 +366,10 @@ public class PluginLoadingTest {
             Files.writeString(skillDir.resolve("SKILL.md"),
                 "---\n" +
                 "name: weather_advisor\n" +
-                "description: \"根据天气情况给出户外活动建议，TRIGGER使用\"\n" +
+                "description: \"Provides outdoor activity advice based on weather. TRIGGER: use for weather-based outdoor advice.\"\n" +
                 "---\n" +
-                "你是一个天气顾问，根据用户提供的天气信息，给出合理的户外活动建议。\n" +
-                "请简洁地回答，包含是否适合出行、穿衣建议、活动推荐。\n");
+                "You are a weather advisor. Based on the user's weather information, provide reasonable outdoor activity advice.\n" +
+                "Answer concisely and include travel suitability, clothing advice, and activity recommendations.\n");
         }
 
         if (withSubAgent) {
@@ -375,11 +378,11 @@ public class PluginLoadingTest {
             Files.writeString(agentDir.resolve("AGENT.md"),
                 "---\n" +
                 "name: outdoor_advisor\n" +
-                "description: 户外活动规划子Agent，综合天气和用户偏好给出活动建议。\n" +
+                "description: Outdoor activity planning sub-agent that combines weather and user preferences.\n" +
                 "---\n" +
-                "你是一个专业的户外活动规划师。\n" +
-                "根据用户提供的天气信息和需求，给出详细的户外活动规划建议。\n" +
-                "包括：活动类型、时间安排、注意事项。\n");
+                "You are a professional outdoor activity planner.\n" +
+                "Based on the user's weather information and requirements, provide detailed outdoor activity planning advice.\n" +
+                "Include activity type, timing, and precautions.\n");
         }
 
         return baseDir;
@@ -398,14 +401,14 @@ public class PluginLoadingTest {
     // ── Inner @Plugin class for inline tests ──────────────────────────────────
 
     @Plugin(id = "inline-weather-plugin", name = "Inline Weather Plugin",
-            description = "内联天气查询插件", tags = {"weather"})
+            description = "Inline weather query plugin", tags = {"weather"})
     public static class InlineWeatherPlugin {
 
-        @AgentTool("获取指定城市今天的天气，包括温度和运动建议。")
+        @AgentTool("Gets today's weather for a given city, including temperature and exercise advice.")
         public String getWeather(String city) {
             String c = city != null ? city : "";
-            if (c.contains("北京")) return "北京今日：晴，22°C，空气优良，非常适合户外跑步。";
-            return c + "：多云，18°C，建议减少户外活动。";
+            if (c.contains("Beijing")) return "Beijing today: sunny, 22°C, excellent air quality, very suitable for outdoor running.";
+            return c + ": cloudy, 18°C. Reduce outdoor activity.";
         }
     }
 }

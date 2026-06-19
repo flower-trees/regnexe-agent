@@ -198,7 +198,7 @@ public class DefaultPluginManager implements PluginManager {
                          caps.add(CapabilityDescriptor.builder()
                                  .capabilityId(pluginId + "." + toolName)
                                  .pluginId(pluginId).type(CapabilityType.MCP_TOOL)
-                                 .name(toolName).description(toolDesc).tags(toolTags)
+                                 .tags(toolTags)
                                  .tool(tool)
                                  .build());
                          log.debug("Loaded tool '{}' from plugin '{}'", toolName, pluginId);
@@ -224,7 +224,6 @@ public class DefaultPluginManager implements PluginManager {
                     caps.add(CapabilityDescriptor.builder()
                             .capabilityId(pluginId + "." + config.getName())
                             .pluginId(pluginId).type(CapabilityType.SKILL)
-                            .name(config.getName()).description(config.getDescription())
                             .skillConfig(config)
                             .build());
                     log.debug("Loaded skill '{}' from plugin '{}'", config.getName(), pluginId);
@@ -250,7 +249,6 @@ public class DefaultPluginManager implements PluginManager {
                     caps.add(CapabilityDescriptor.builder()
                             .capabilityId(pluginId + "." + config.getName())
                             .pluginId(pluginId).type(CapabilityType.SUB_AGENT)
-                            .name(config.getName()).description(config.getDescription())
                             .subAgentConfig(config)
                             .build());
                     log.debug("Loaded subagent '{}' from plugin '{}'", config.getName(), pluginId);
@@ -304,8 +302,6 @@ public class DefaultPluginManager implements PluginManager {
                         .capabilityId(ann.id() + "." + tool.getName())
                         .pluginId(ann.id())
                         .type(CapabilityType.MCP_TOOL)
-                        .name(tool.getName())
-                        .description(tool.getDescription())
                         .tool(tool)
                         .build())
                 .toList();

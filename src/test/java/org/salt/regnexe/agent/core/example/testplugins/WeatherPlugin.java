@@ -12,35 +12,35 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core.testplugins;
+package org.salt.regnexe.agent.core.example.testplugins;
 
 import org.salt.regnexe.agent.core.market.plugin.Plugin;
 import org.salt.jlangchain.rag.tools.annotation.AgentTool;
 
 /**
- * Sample @Plugin class used by PluginLoadingTest.scanPackagesShouldLoadDescriptors.
+ * Sample @Plugin class used by Example05PluginLoadingTest.scanPackagesShouldLoadDescriptors.
  * Must have a public no-arg constructor so DefaultPluginManager can instantiate it.
  */
 @Plugin(
     id          = "test-weather-plugin",
     name        = "Test Weather Plugin",
-    description = "测试用天气查询插件",
+    description = "Test weather query plugin",
     version     = "1.0",
     tags        = {"weather", "test"}
 )
 public class WeatherPlugin {
 
-    @AgentTool("获取指定城市今天的天气，包括温度和户外活动建议。")
+    @AgentTool("Gets today's weather for a given city, including temperature and outdoor activity advice.")
     public String getWeather(String city) {
         String c = city != null ? city : "";
-        if (c.contains("北京")) {
-            return "北京今日：晴，22°C，空气优良，非常适合户外跑步。";
+        if (c.contains("Beijing")) {
+            return "Beijing today: sunny, 22°C, excellent air quality, very suitable for outdoor running.";
         }
-        return c + "：多云，18°C，建议减少户外活动。";
+        return c + ": cloudy, 18°C. Reduce outdoor activity.";
     }
 
-    @AgentTool("获取穿衣建议（根据温度）。")
+    @AgentTool("Gets clothing advice based on temperature.")
     public String getDressAdvice(String temperature) {
-        return "温度 " + temperature + "°C：建议穿轻薄外套，注意早晚温差。";
+        return "Temperature " + temperature + "°C: wear a light jacket and watch the morning-evening temperature gap.";
     }
 }

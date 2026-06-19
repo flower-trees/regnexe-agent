@@ -12,11 +12,14 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core;
+package org.salt.regnexe.agent.core.example;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.salt.regnexe.agent.core.RegnexeAgent;
+import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
+import org.salt.regnexe.agent.core.TestApplication;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
@@ -43,7 +46,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * M1 pause / resume smoke tests.
+ * Example 07: pause / resume smoke tests.
  *
  * Test 1 — manualPausedStateShouldResume
  * ----------------------------------------
@@ -64,7 +67,7 @@ import java.util.concurrent.TimeUnit;
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
-public class PauseResumeTest {
+public class Example07PauseResumeTest {
 
     @Autowired
     private RegnexeAgentBuilder regnexeAgentBuilder;
@@ -77,7 +80,7 @@ public class PauseResumeTest {
                 .pluginId("weather-plugin")
                 .type(CapabilityType.MCP_TOOL)
                 .name("get_weather")
-                .description("获取指定城市今天的天气，包括温度和运动建议。输入城市名称（中文）。")
+                .description("Gets today's weather for a given city, including temperature and exercise advice.")
                 .tags(List.of("weather"))
                 .tool(weatherTool)
                 .build();
@@ -85,7 +88,7 @@ public class PauseResumeTest {
         SimpleMarketplace marketplace = new SimpleMarketplace();
         marketplace.install(PluginDescriptor.builder()
                 .pluginId("weather-plugin").version("1.0")
-                .name("Weather Plugin").description("天气查询")
+                .name("Weather Plugin").description("Weather query")
                 .capabilities(List.of(cap))
                 .build());
         return marketplace;
@@ -103,9 +106,9 @@ public class PauseResumeTest {
 
         Tool weatherTool = Tool.builder()
                 .name("get_weather")
-                .description("获取指定城市今天的天气")
-                .params("city: String -- 城市名称")
-                .func(city -> "北京今日：晴，22°C，空气优良，非常适合户外跑步。")
+                .description("Gets today's weather for a given city.")
+                .params("city: String -- city name")
+                .func(city -> "Beijing today: sunny, 22°C, excellent air quality, very suitable for outdoor running.")
                 .build();
 
         InMemoryTaskStore taskStore = new InMemoryTaskStore();
@@ -121,7 +124,7 @@ public class PauseResumeTest {
         // Build a PAUSED task (zero rounds completed so far)
         String sessionId = UUID.randomUUID().toString();
         TaskRequest request = new TaskRequest();
-        request.setGoal("查询北京今天的天气，告诉我是否适合户外跑步");
+        request.setGoal("Check today's weather in Beijing and tell me whether it is suitable for outdoor running.");
         request.setSessionId(sessionId);
 
         TaskExecutionState pausedState = new TaskExecutionState();
@@ -137,7 +140,7 @@ public class PauseResumeTest {
         taskStore.save(pausedState);
 
         // Resume with a supplement
-        AgentResult result = agent.resume(sessionId, "另外请考虑今天空气质量");
+        AgentResult result = agent.resume(sessionId, "Also consider today's air quality.");
 
         System.out.println("\n========== Manual Resume Result ==========");
         System.out.println("Status : " + result.getStatus());
@@ -170,8 +173,8 @@ public class PauseResumeTest {
 
         Tool slowWeatherTool = Tool.builder()
                 .name("get_weather")
-                .description("获取指定城市今天的天气，包括温度和运动建议。输入城市名称（中文）。")
-                .params("city: String -- 城市名称")
+                .description("Gets today's weather for a given city, including temperature and exercise advice.")
+                .params("city: String -- city name")
                 .func(city -> {
                     toolStarted.countDown();             // notify: tool is running
                     try {
@@ -179,7 +182,7 @@ public class PauseResumeTest {
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
-                    return "北京今日：晴，22°C，空气优良，非常适合户外跑步。";
+                    return "Beijing today: sunny, 22°C, excellent air quality, very suitable for outdoor running.";
                 })
                 .build();
 
@@ -195,7 +198,7 @@ public class PauseResumeTest {
                 .build();
 
         TaskRequest request = new TaskRequest();
-        request.setGoal("查询北京今天的天气，告诉我是否适合户外跑步");
+        request.setGoal("Check today's weather in Beijing and tell me whether it is suitable for outdoor running.");
         request.setSessionId(sessionId);
 
         // ── Start execute in background ───────────────────────────────────────
@@ -222,7 +225,7 @@ public class PauseResumeTest {
         // ── Resume with supplement ────────────────────────────────────────────
         // pauseSignaled latch is already 0 so the slow tool returns immediately
         // on the next call — no additional coordination needed.
-        AgentResult resumeResult = agent.resume(sessionId, "请同时告知空气质量情况");
+        AgentResult resumeResult = agent.resume(sessionId, "Also include the air quality.");
 
         System.out.println("\n========== Resume Result ==========");
         System.out.println("Status : " + resumeResult.getStatus());

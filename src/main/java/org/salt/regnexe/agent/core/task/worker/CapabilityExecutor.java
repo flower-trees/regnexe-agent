@@ -171,9 +171,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 case SKILL -> {
                     if (cap.getSkillConfig() != null) {
                         Skill.Builder sb = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
-                        if (cap.getOwnTools() != null && !cap.getOwnTools().isEmpty()) {
-                            sb.tools(cap.getOwnTools());
-                        }
                         if (verbose) {
                             sb.verbose(true);
                         } else {
@@ -193,8 +190,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             AgentEvent.ofCapabilityTokenUsage(taskId, round, skillCapName, u)));
                         if (maxIterations != null) sb.maxIterations(maxIterations);
                         skills.add(sb.build());
-                    } else if (cap.getTool() != null) {
-                        mcpTools.add(cap.getTool());
                     }
                 }
                 case SUB_AGENT -> {
@@ -243,8 +238,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         }
 
         // Ensure each skill/subagent's allowedTools are present in mcpTools so that
-        // McpAgentExecutor.build() can inject them. These tools are internal to the
-        // skill/subagent and filtered by allowedTools during injection.
+        // McpAgentExecutor.build() can inject inherited tools correctly.
         Set<String> existingNames = new HashSet<>();
         mcpTools.forEach(t -> existingNames.add(t.getName()));
 
