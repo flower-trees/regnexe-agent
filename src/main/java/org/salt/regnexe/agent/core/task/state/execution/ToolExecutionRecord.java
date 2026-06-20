@@ -15,27 +15,22 @@
 package org.salt.regnexe.agent.core.task.state.execution;
 
 import lombok.Data;
-import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
-
-import java.util.List;
 
 /**
- * Executor output for one round
+ * One completed tool/capability observation captured during execution.
  */
 @Data
-public class ExecutionOutput {
+public class ToolExecutionRecord {
 
-    /**
-     * Final text answer produced by McpAgentExecutor
-     */
-    private String finalText;
+    private int round;
 
-    /**
-     * Serialized AgentTaskContext for checkpoint/resume
-     */
-    private String partialContext;
+    private String toolName;
 
-    private List<ToolExecutionRecord> toolExecutions;
+    private String toolCall;
 
-    private ExecutionStatus status;
+    private String arguments;
+
+    private String observation;
+
+    private long timestamp;
 }

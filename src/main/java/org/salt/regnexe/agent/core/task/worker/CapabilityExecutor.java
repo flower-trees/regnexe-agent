@@ -30,6 +30,7 @@ import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
+import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
@@ -83,18 +84,20 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
         Integer maxAgentIterations = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
         boolean verbose = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.VERBOSE));
+        boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
 
         int round = state.getCurrentRound();
         String taskId = state.getTaskId();
         state.setLastToolResult(null);
+        List<ToolExecutionRecord> toolExecutions = new ArrayList<>();
 
         List<Tool> mcpTools = new ArrayList<>();
         List<Skill> skills = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skills, subAgents,
-                maxAgentIterations, listener, taskId, round, verbose);
+                maxAgentIterations, listener, taskId, round, verbose, toolExecutions);
         PlanOutput plan = currentRound(state).getPlan();
         ResultStrategy resultStrategy = resolveResultStrategy(plan);
         boolean returnLastToolResult = resultStrategy == ResultStrategy.RETURN_LAST;
@@ -112,6 +115,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 })
                 .onObservation(obs -> {
                     state.setLastToolResult(obs);
+                    recordToolExecution(toolExecutions, round, outerToolCall.get(), obs);
                     listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
                             formatToolResult(outerToolCall.get(), obs)));
                 })
@@ -124,7 +128,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         this.mcpAgentExecutor = executor;
 
-        String agentInput = buildAgentInput(state.getRequest().getGoal(), narrative, inputDescs, plan, resultStrategy);
+        String agentInput = buildAgentInput(state, narrative, inputDescs, plan, resultStrategy, resumeMode);
 
         listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_STARTED,
                 "Selected: " + selectedCapIds + " | Strategy: " + resultStrategy + " | " + agentInput));
@@ -142,6 +146,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                     "SUCCESS | " + executionText));
             log.debug("Round {}: execution succeeded", state.getCurrentRound());
         } catch (AgentStoppedException e) {
+            output.setFinalText(state.getLastToolResult());
             output.setStatus(ExecutionStatus.STOPPED);
             state.setStatus(TaskStatus.PAUSED);
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED"));
@@ -155,6 +160,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         } finally {
             this.mcpAgentExecutor = null;
         }
+        output.setToolExecutions(new ArrayList<>(toolExecutions));
 
         currentRound(state).setExecutionResult(output);
         state.setUpdatedAt(System.currentTimeMillis());
@@ -169,11 +175,24 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         return plan.getResultStrategy();
     }
 
-    private String buildAgentInput(String goal, String narrative, Map<String, String> inputDescs,
-                                   PlanOutput plan, ResultStrategy resultStrategy) {
+    private String buildAgentInput(TaskExecutionState state, String narrative, Map<String, String> inputDescs,
+                                   PlanOutput plan, ResultStrategy resultStrategy, boolean resumeMode) {
         StringBuilder sb = new StringBuilder();
+        String goal = state.getRequest().getGoal();
         if (goal != null && !goal.isBlank()) {
             sb.append("Original goal:\n").append(goal).append("\n\n");
+        }
+        String supplement = state.getRequest().getSupplementInput();
+        if (supplement != null && !supplement.isBlank()) {
+            sb.append("User supplement:\n").append(supplement).append("\n\n");
+        }
+        if (resumeMode) {
+            String previousRecords = formatPreviousExecutionRecords(state);
+            if (!previousRecords.isBlank()) {
+                sb.append("Previous execution records before resume:\n")
+                  .append(previousRecords)
+                  .append("\n\n");
+            }
         }
         sb.append("Execution plan:\n").append(narrative != null ? narrative : "");
         if (inputDescs != null && !inputDescs.isEmpty()) {
@@ -198,6 +217,28 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         return sb.toString();
     }
 
+    private String formatPreviousExecutionRecords(TaskExecutionState state) {
+        if (state.getRounds() == null || state.getRounds().isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (RoundRecord round : state.getRounds()) {
+            ExecutionOutput output = round.getExecutionResult();
+            if (output == null || output.getToolExecutions() == null || output.getToolExecutions().isEmpty()) {
+                continue;
+            }
+            sb.append("Round ").append(round.getRoundNumber()).append(":\n");
+            for (ToolExecutionRecord record : output.getToolExecutions()) {
+                sb.append("- ").append(record.getToolName());
+                if (record.getArguments() != null && !record.getArguments().isBlank()) {
+                    sb.append(" ").append(record.getArguments());
+                }
+                sb.append(" -> ").append(record.getObservation()).append("\n");
+            }
+        }
+        return sb.toString().trim();
+    }
+
     /**
      * Separates selected capabilities into MCP tools, Skills, and SubAgents.
      * Also resolves each skill/subagent's allowedTools from the marketplace and
@@ -207,7 +248,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                      ChainActor chainActor, BaseChatModel llm, ModelProvider llmProvider,
                                      List<Tool> mcpTools, List<Skill> skills, List<SubAgent> subAgents,
                                      Integer maxIterations,
-                                     AgentEventListener listener, String taskId, int round, boolean verbose) {
+                                     AgentEventListener listener, String taskId, int round, boolean verbose,
+                                     List<ToolExecutionRecord> toolExecutions) {
         if (marketplace == null || capIds == null) return;
 
         Set<String> seenCapIds = new HashSet<>();
@@ -239,7 +281,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             });
                             sb.onObservation(obs -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                                              formatToolResult(skillToolCall.get(), obs))));
+                                              formatObservedToolResult(toolExecutions, round, skillToolCall.get(), obs))));
                         }
                         String skillCapName = cap.getName();
                         sb.onTokenUsage(u -> listener.dispatch(
@@ -283,7 +325,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             });
                             ab.onObservation(obs -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                                              formatToolResult(subAgentToolCall.get(), obs))));
+                                              formatObservedToolResult(toolExecutions, round, subAgentToolCall.get(), obs))));
                         }
                         String agentCapName = cap.getName();
                         ab.onTokenUsage(u -> listener.dispatch(
@@ -322,6 +364,24 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         return scope == null || scope.isBlank() ? name : scope + " " + name;
     }
 
+    private String formatObservedToolResult(List<ToolExecutionRecord> records, int round,
+                                            String toolCallLabel, String observation) {
+        recordToolExecution(records, round, toolCallLabel, observation);
+        return formatToolResult(toolCallLabel, observation);
+    }
+
+    private void recordToolExecution(List<ToolExecutionRecord> records, int round,
+                                     String toolCallLabel, String observation) {
+        ToolExecutionRecord record = new ToolExecutionRecord();
+        record.setRound(round);
+        record.setToolName(toolCallLabel == null || toolCallLabel.isBlank() ? "unknown" : toolCallLabel);
+        record.setToolCall(toolCallLabel);
+        record.setArguments(extractToolArguments(toolCallLabel));
+        record.setObservation(observation);
+        record.setTimestamp(System.currentTimeMillis());
+        records.add(record);
+    }
+
     private String extractToolName(String toolCallText) {
         if (toolCallText == null || toolCallText.isBlank()) {
             return "unknown";
@@ -333,6 +393,14 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         }
         int space = text.indexOf(' ');
         return space > 0 ? text.substring(0, space).trim() : text;
+    }
+
+    private String extractToolArguments(String toolCallText) {
+        if (toolCallText == null || toolCallText.isBlank()) {
+            return "";
+        }
+        int jsonStart = toolCallText.indexOf('{');
+        return jsonStart >= 0 ? toolCallText.substring(jsonStart).trim() : "";
     }
 
     private String formatToolResult(String toolCallLabel, String observation) {

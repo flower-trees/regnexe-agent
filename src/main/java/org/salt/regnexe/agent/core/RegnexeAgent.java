@@ -148,7 +148,7 @@ public class RegnexeAgent {
                 "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds));
 
         List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
-        return runLoop(state, sessionHistory);
+        return runLoop(state, sessionHistory, false);
     }
 
     /**
@@ -176,7 +176,7 @@ public class RegnexeAgent {
                 + (supplementInput != null ? " | supplement: " + supplementInput : "")));
 
         List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
-        return runLoop(state, sessionHistory);
+        return runLoop(state, sessionHistory, true);
     }
 
     /**
@@ -193,11 +193,11 @@ public class RegnexeAgent {
 
     // ── Loop ─────────────────────────────────────────────────────────────────
 
-    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory) {
+    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory, boolean resumeMode) {
         AtomicBoolean stopSignal = new AtomicBoolean(false);
         this.activeStopSignal = stopSignal;
 
-        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory);
+        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory, resumeMode);
 
         // Loop condition uses state.getCurrentRound() so resume continues correctly
         // from wherever the prior execution left off.
@@ -252,7 +252,8 @@ public class RegnexeAgent {
 
     private Map<String, Object> buildTransmitMap(TaskExecutionState state,
                                                   AtomicBoolean stopSignal,
-                                                  List<HistoryInfos> sessionHistory) {
+                                                  List<HistoryInfos> sessionHistory,
+                                                  boolean resumeMode) {
         Map<String, Object> map = new HashMap<>();
         map.put(ContextBusKeys.STATE, state);
         map.put(ContextBusKeys.CHAIN_ACTOR, chainActor);
@@ -272,6 +273,7 @@ public class RegnexeAgent {
         if (sessionHistory != null && !sessionHistory.isEmpty()) {
             map.put(ContextBusKeys.SESSION_HISTORY, sessionHistory);
         }
+        map.put(ContextBusKeys.RESUME_MODE, resumeMode);
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
         map.put(ContextBusKeys.MAX_CONTEXT_OUTPUT_CHARS, maxContextOutputChars);
         map.put(ContextBusKeys.VERBOSE, verbose);

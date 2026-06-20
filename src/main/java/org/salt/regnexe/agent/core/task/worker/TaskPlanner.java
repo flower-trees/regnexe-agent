@@ -28,6 +28,8 @@ import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilityCandidate;
+import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
+import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
@@ -80,6 +82,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - UNIQUE IDs: selectedCapabilityIds must contain each capability ID at most once. \
               If the goal involves conditional retries (e.g. "if QC fails, retry"), list the capability \
               once — the executor agent will call it again as needed based on the narrative.
+            - RESUME CONTEXT: When previous execution records are provided, use them as completed evidence. \
+              If those records already contain enough information to satisfy the goal and supplement, you may \
+              set selectedCapabilityIds to an empty array and instruct the executor to answer from the existing \
+              records without calling tools again.
             - RESULT STRATEGY: Choose resultStrategy based on the user's deliverable semantics:
               * RETURN_LAST: use only when the final selected capability is expected to produce the complete \
                 user-facing answer and earlier capability results are merely intermediate inputs.
@@ -122,6 +128,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         List<CapabilityCandidate> candidates = bus.getTransmit(ContextBusKeys.CANDIDATES);
         List<HistoryInfos> sessionHistory = bus.getTransmit(ContextBusKeys.SESSION_HISTORY);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
+        boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
         String taskId = state.getTaskId();
@@ -134,7 +141,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
                 "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
 
-        ChatPromptValue prompt = buildChatPrompt(state, candidates, sessionHistory);
+        ChatPromptValue prompt = buildChatPrompt(state, candidates, sessionHistory, resumeMode);
         ChatGeneration result = chainActor.invoke(flow, prompt);
 
         PlanOutput plan = parsePlan(result.getText());
@@ -172,7 +179,8 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
     private ChatPromptValue buildChatPrompt(TaskExecutionState state,
                                             List<CapabilityCandidate> candidates,
-                                            List<HistoryInfos> sessionHistory) {
+                                            List<HistoryInfos> sessionHistory,
+                                            boolean resumeMode) {
         List<BaseMessage> messages = new ArrayList<>();
 
         // ── System message: SYSTEM_PROMPT + SUMMARY + capabilities ───────────
@@ -228,6 +236,15 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             humanSb.append("\n\n== User supplement ==\n").append(supplement);
         }
 
+        if (resumeMode) {
+            String previousRecords = formatPreviousExecutionRecords(state);
+            if (!previousRecords.isBlank()) {
+                humanSb.append("\n\n== Previous execution records before resume ==\n")
+                       .append(previousRecords)
+                       .append("\n\nIf these previous records already satisfy the goal and supplement, do not select tools again.");
+            }
+        }
+
         ReflectionHint lastHint = lastHint(state);
         if (lastHint != null) {
             humanSb.append("\n\nGuidance from previous round:");
@@ -253,6 +270,28 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         messages.add(BaseMessage.fromMessage(MessageType.HUMAN.getCode(), humanSb.toString()));
 
         return ChatPromptValue.builder().messages(messages).build();
+    }
+
+    private String formatPreviousExecutionRecords(TaskExecutionState state) {
+        if (state.getRounds() == null || state.getRounds().isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (RoundRecord round : state.getRounds()) {
+            ExecutionOutput output = round.getExecutionResult();
+            if (output == null || output.getToolExecutions() == null || output.getToolExecutions().isEmpty()) {
+                continue;
+            }
+            sb.append("Round ").append(round.getRoundNumber()).append(":\n");
+            for (ToolExecutionRecord record : output.getToolExecutions()) {
+                sb.append("- ").append(record.getToolName());
+                if (record.getArguments() != null && !record.getArguments().isBlank()) {
+                    sb.append(" ").append(record.getArguments());
+                }
+                sb.append(" -> ").append(record.getObservation()).append("\n");
+            }
+        }
+        return sb.toString().trim();
     }
 
     private PlanOutput parsePlan(String text) {
