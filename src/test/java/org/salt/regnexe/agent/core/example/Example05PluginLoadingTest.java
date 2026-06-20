@@ -116,7 +116,7 @@ public class Example05PluginLoadingTest {
     @Test
     public void scanPackagesShouldLoadDescriptors() {
         DefaultPluginManager mgr = new DefaultPluginManager();
-        mgr.scanPackages("org.salt.regnexe.agent.core.testplugins");
+        mgr.scanPackages("org.salt.regnexe.agent.core.example.testplugins");
         SimpleMarketplace marketplace = new SimpleMarketplace();
         marketplace.load(mgr);
 
@@ -270,7 +270,7 @@ public class Example05PluginLoadingTest {
     public void builderWithScanPackagesShouldRunAgent() {
         RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-                .withScanPackages("org.salt.regnexe.agent.core.testplugins")
+                .withScanPackages("org.salt.regnexe.agent.core.example.testplugins")
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
                 .build();
@@ -292,7 +292,7 @@ public class Example05PluginLoadingTest {
 
     @Test
     public void builderWithDirectoryShouldRunAgent() throws IOException {
-        Path baseDir = buildTempPluginDir(false, false);
+        Path baseDir = buildTempPluginDir(true, true);
         try {
             RegnexeAgent agent = regnexeAgentBuilder
                     .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")

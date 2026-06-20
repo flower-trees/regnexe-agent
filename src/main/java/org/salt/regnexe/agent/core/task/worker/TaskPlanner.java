@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -28,6 +29,7 @@ import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilityCandidate;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
+import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
@@ -78,6 +80,15 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - UNIQUE IDs: selectedCapabilityIds must contain each capability ID at most once. \
               If the goal involves conditional retries (e.g. "if QC fails, retry"), list the capability \
               once — the executor agent will call it again as needed based on the narrative.
+            - RESULT STRATEGY: Choose resultStrategy based on the user's deliverable semantics:
+              * RETURN_LAST: use only when the final selected capability is expected to produce the complete \
+                user-facing answer and earlier capability results are merely intermediate inputs.
+              * SYNTHESIZE: use when the user asks for multiple deliverables, multiple independent tasks, \
+                comparisons, a combined report, or when outputs from more than one capability must appear \
+                in the final answer.
+            - FINAL ANSWER REQUIREMENTS: list the concrete user-facing items the executor's final answer \
+              must include. For SYNTHESIZE, include every required deliverable. For RETURN_LAST, include \
+              the single complete deliverable expected from the final capability.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
@@ -88,6 +99,8 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 "<id1>": "<what to pass as input to this capability>",
                 "<id2>": "<what to pass; may reference the output of id1>"
               },
+              "resultStrategy": "<use exactly RETURN_LAST or SYNTHESIZE>",
+              "finalAnswerRequirements": ["<required item 1>", "<required item 2>"],
               "reasoning": "<why you chose these capabilities>"
             }
             """;
@@ -98,6 +111,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
     public Object process(Object input) {
         IContextBus bus = getContextBus();
         TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
+        if (state.getStatus() != TaskStatus.RUNNING) {
+            log.debug("TaskPlanner skipped because task status is {}", state.getStatus());
+            return null;
+        }
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
@@ -121,6 +138,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         ChatGeneration result = chainActor.invoke(flow, prompt);
 
         PlanOutput plan = parsePlan(result.getText());
+        normalizePlan(plan);
         expandSelectedAllowedTools(plan, candidates);
 
         bus.putTransmit(ContextBusKeys.PLAN_NARRATIVE, plan.getNarrative());
@@ -131,7 +149,9 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         state.setUpdatedAt(System.currentTimeMillis());
 
         listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
-                "Selected: " + plan.getSelectedCapabilityIds() + " | " + plan.getNarrative()));
+                "Selected: " + plan.getSelectedCapabilityIds()
+                + " | Strategy: " + plan.getResultStrategy()
+                + " | " + plan.getNarrative()));
         log.debug("Round {}: plan produced, selected caps: {}",
                 state.getCurrentRound(), plan.getSelectedCapabilityIds());
 
@@ -250,6 +270,22 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 fallback.setReasoning("parse error");
                 return fallback;
             }
+        }
+    }
+
+    private void normalizePlan(PlanOutput plan) {
+        if (plan == null) return;
+        if (plan.getSelectedCapabilityIds() == null) {
+            plan.setSelectedCapabilityIds(List.of());
+        }
+        if (plan.getCapabilityInputDescriptions() == null) {
+            plan.setCapabilityInputDescriptions(java.util.Collections.emptyMap());
+        }
+        if (plan.getResultStrategy() == null) {
+            plan.setResultStrategy(ResultStrategy.SYNTHESIZE);
+        }
+        if (plan.getFinalAnswerRequirements() == null) {
+            plan.setFinalAnswerRequirements(List.of());
         }
     }
 

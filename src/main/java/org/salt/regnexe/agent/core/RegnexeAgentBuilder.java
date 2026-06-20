@@ -162,7 +162,7 @@ public class RegnexeAgentBuilder {
         private int sessionBufferSize = 10;
         private AgentContext agentContext;
         private int maxAgentIterations = 20;
-        private int maxContextOutputChars = 800;
+        private int maxContextOutputChars = 2000;
         private boolean verbose = false;
         private ConversationMemory sessionMemory;
 

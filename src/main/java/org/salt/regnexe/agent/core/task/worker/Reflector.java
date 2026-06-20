@@ -90,6 +90,10 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
     public Object process(Object input) {
         IContextBus bus = getContextBus();
         TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
+        if (state.getStatus() != TaskStatus.RUNNING) {
+            log.debug("Reflector skipped because task status is {}", state.getStatus());
+            return null;
+        }
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);

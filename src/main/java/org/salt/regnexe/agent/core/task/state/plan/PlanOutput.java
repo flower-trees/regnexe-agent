@@ -43,6 +43,17 @@ public class PlanOutput {
     private Map<String, String> capabilityInputDescriptions;
 
     /**
+     * Controls whether Executor should return the final capability result directly
+     * or ask the inner agent to synthesize all relevant observations.
+     */
+    private ResultStrategy resultStrategy;
+
+    /**
+     * User-facing requirements that must be covered by the final execution answer.
+     */
+    private List<String> finalAnswerRequirements;
+
+    /**
      * Planner's reasoning, for auditing
      */
     private String reasoning;

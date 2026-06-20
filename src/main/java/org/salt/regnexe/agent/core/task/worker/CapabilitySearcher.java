@@ -17,6 +17,7 @@ package org.salt.regnexe.agent.core.task.worker;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -43,6 +44,10 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
     public Object process(Object input) {
         IContextBus bus = getContextBus();
         TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
+        if (state.getStatus() != TaskStatus.RUNNING) {
+            log.debug("CapabilitySearcher skipped because task status is {}", state.getStatus());
+            return null;
+        }
         Marketplace marketplace = bus.getTransmit(ContextBusKeys.MARKETPLACE);
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
 

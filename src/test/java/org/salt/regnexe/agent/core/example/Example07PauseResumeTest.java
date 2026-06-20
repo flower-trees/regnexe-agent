@@ -79,8 +79,6 @@ public class Example07PauseResumeTest {
                 .capabilityId("get_weather")
                 .pluginId("weather-plugin")
                 .type(CapabilityType.MCP_TOOL)
-                .name("get_weather")
-                .description("Gets today's weather for a given city, including temperature and exercise advice.")
                 .tags(List.of("weather"))
                 .tool(weatherTool)
                 .build();
