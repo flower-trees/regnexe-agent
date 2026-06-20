@@ -34,7 +34,7 @@ public final class TextCompressor {
     private static final String PROMPT =
             "Compress the following text to fit within ${targetChars} characters.\n" +
             "Rules:\n" +
-            "- MUST preserve exactly: proper nouns, titles (书名/选题名/chapter titles), " +
+            "- MUST preserve exactly: proper nouns, titles and headings, " +
             "numbers, user selections/choices, and key decisions.\n" +
             "- You MAY use brief bullet points for lists.\n" +
             "- OMIT: background explanations, verbose descriptions, redundant context.\n" +

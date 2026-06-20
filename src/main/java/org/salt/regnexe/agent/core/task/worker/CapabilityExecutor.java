@@ -20,6 +20,7 @@ import org.salt.function.flow.node.FlowNode;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.util.ExecutionRecordFormatter;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -110,14 +111,15 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .context(agentContext)
                 .onLlm(text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
                 .onToolCall(tc -> {
-                    outerToolCall.set(formatToolCallLabel(null, tc));
+                    outerToolCall.set(tc);
                     listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc));
                 })
                 .onObservation(obs -> {
                     state.setLastToolResult(obs);
-                    recordToolExecution(toolExecutions, round, outerToolCall.get(), obs);
+                    String label = formatToolCallLabel(null, outerToolCall.get());
+                    recordToolExecution(toolExecutions, round, label, outerToolCall.get(), obs);
                     listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                            formatToolResult(outerToolCall.get(), obs)));
+                            formatToolResult(label, obs)));
                 })
                 .returnLastToolResult(returnLastToolResult)
                 .onTokenUsage(u -> listener.dispatch(AgentEvent.ofTokenUsage(taskId, round, u)));
@@ -187,7 +189,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             sb.append("User supplement:\n").append(supplement).append("\n\n");
         }
         if (resumeMode) {
-            String previousRecords = formatPreviousExecutionRecords(state);
+            String previousRecords = ExecutionRecordFormatter.formatPreviousExecutionRecords(state);
             if (!previousRecords.isBlank()) {
                 sb.append("Previous execution records before resume:\n")
                   .append(previousRecords)
@@ -215,28 +217,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             plan.getFinalAnswerRequirements().forEach(req -> sb.append("- ").append(req).append("\n"));
         }
         return sb.toString();
-    }
-
-    private String formatPreviousExecutionRecords(TaskExecutionState state) {
-        if (state.getRounds() == null || state.getRounds().isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (RoundRecord round : state.getRounds()) {
-            ExecutionOutput output = round.getExecutionResult();
-            if (output == null || output.getToolExecutions() == null || output.getToolExecutions().isEmpty()) {
-                continue;
-            }
-            sb.append("Round ").append(round.getRoundNumber()).append(":\n");
-            for (ToolExecutionRecord record : output.getToolExecutions()) {
-                sb.append("- ").append(record.getToolName());
-                if (record.getArguments() != null && !record.getArguments().isBlank()) {
-                    sb.append(" ").append(record.getArguments());
-                }
-                sb.append(" -> ").append(record.getObservation()).append("\n");
-            }
-        }
-        return sb.toString().trim();
     }
 
     /**
@@ -275,13 +255,13 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                 AgentEvent.of(taskId, round, EventType.SKILL_LLM_RESPONDED,
                                               scope + " " + text)));
                             sb.onToolCall(tc -> {
-                                skillToolCall.set(formatToolCallLabel(scope, tc));
+                                skillToolCall.set(tc);
                                 listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
                                         scope + " " + tc));
                             });
                             sb.onObservation(obs -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                                              formatObservedToolResult(toolExecutions, round, skillToolCall.get(), obs))));
+                                              formatObservedToolResult(toolExecutions, round, scope, skillToolCall.get(), obs))));
                         }
                         String skillCapName = cap.getName();
                         sb.onTokenUsage(u -> listener.dispatch(
@@ -319,13 +299,13 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                 AgentEvent.of(taskId, round, EventType.AGENT_LLM_RESPONDED,
                                               scope + " " + text)));
                             ab.onToolCall(tc -> {
-                                subAgentToolCall.set(formatToolCallLabel(scope, tc));
+                                subAgentToolCall.set(tc);
                                 listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
                                         scope + " " + tc));
                             });
                             ab.onObservation(obs -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                                              formatObservedToolResult(toolExecutions, round, subAgentToolCall.get(), obs))));
+                                              formatObservedToolResult(toolExecutions, round, scope, subAgentToolCall.get(), obs))));
                         }
                         String agentCapName = cap.getName();
                         ab.onTokenUsage(u -> listener.dispatch(
@@ -365,18 +345,19 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     }
 
     private String formatObservedToolResult(List<ToolExecutionRecord> records, int round,
-                                            String toolCallLabel, String observation) {
-        recordToolExecution(records, round, toolCallLabel, observation);
-        return formatToolResult(toolCallLabel, observation);
+                                            String scope, String rawToolCall, String observation) {
+        String label = formatToolCallLabel(scope, rawToolCall);
+        recordToolExecution(records, round, label, rawToolCall, observation);
+        return formatToolResult(label, observation);
     }
 
     private void recordToolExecution(List<ToolExecutionRecord> records, int round,
-                                     String toolCallLabel, String observation) {
+                                     String toolCallLabel, String rawToolCall, String observation) {
         ToolExecutionRecord record = new ToolExecutionRecord();
         record.setRound(round);
         record.setToolName(toolCallLabel == null || toolCallLabel.isBlank() ? "unknown" : toolCallLabel);
         record.setToolCall(toolCallLabel);
-        record.setArguments(extractToolArguments(toolCallLabel));
+        record.setArguments(extractToolArguments(rawToolCall));
         record.setObservation(observation);
         record.setTimestamp(System.currentTimeMillis());
         records.add(record);

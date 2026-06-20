@@ -20,6 +20,7 @@ import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.util.ExecutionRecordFormatter;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -28,8 +29,6 @@ import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilityCandidate;
-import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
-import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
@@ -237,7 +236,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         }
 
         if (resumeMode) {
-            String previousRecords = formatPreviousExecutionRecords(state);
+            String previousRecords = ExecutionRecordFormatter.formatPreviousExecutionRecords(state);
             if (!previousRecords.isBlank()) {
                 humanSb.append("\n\n== Previous execution records before resume ==\n")
                        .append(previousRecords)
@@ -270,28 +269,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         messages.add(BaseMessage.fromMessage(MessageType.HUMAN.getCode(), humanSb.toString()));
 
         return ChatPromptValue.builder().messages(messages).build();
-    }
-
-    private String formatPreviousExecutionRecords(TaskExecutionState state) {
-        if (state.getRounds() == null || state.getRounds().isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (RoundRecord round : state.getRounds()) {
-            ExecutionOutput output = round.getExecutionResult();
-            if (output == null || output.getToolExecutions() == null || output.getToolExecutions().isEmpty()) {
-                continue;
-            }
-            sb.append("Round ").append(round.getRoundNumber()).append(":\n");
-            for (ToolExecutionRecord record : output.getToolExecutions()) {
-                sb.append("- ").append(record.getToolName());
-                if (record.getArguments() != null && !record.getArguments().isBlank()) {
-                    sb.append(" ").append(record.getArguments());
-                }
-                sb.append(" -> ").append(record.getObservation()).append("\n");
-            }
-        }
-        return sb.toString().trim();
     }
 
     private PlanOutput parsePlan(String text) {
