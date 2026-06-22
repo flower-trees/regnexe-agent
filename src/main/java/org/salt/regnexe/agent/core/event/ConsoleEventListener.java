@@ -28,32 +28,6 @@ public class ConsoleEventListener extends AbstractEventListener {
         super(showTokenEvents, showLlmEvents);
     }
 
-    protected String format(AgentEvent event) {
-        String prefix = switch (event.getType()) {
-            case AGENT_STARTED        -> "[Agent Start   ]";
-            case SEARCH_STARTED       -> "[Search Input  ]";
-            case SEARCH_COMPLETED     -> "[Search Result ]";
-            case PLAN_STARTED         -> "[Plan Input    ]";
-            case PLAN_LLM_RESPONDED   -> "[Plan LLM      ]";
-            case PLAN_COMPLETED       -> "[Plan Result   ]";
-            case EXECUTION_STARTED    -> "[Execute Input ]";
-            case TOOL_CALLED          -> "[TOOL Call     ]";
-            case SKILL_LLM_RESPONDED  -> "[TOOL Skill LLM]";
-            case AGENT_LLM_RESPONDED  -> "[TOOL SubAgent LLM]";
-            case TOOL_RESULT          -> "[TOOL Result   ]";
-            case LLM_RESPONDED        -> "[Execute LLM   ]";
-            case EXECUTION_COMPLETED  -> "[Execute Result]";
-            case REFLECTION_STARTED   -> "[Reflect Input ]";
-            case REFLECT_LLM_RESPONDED-> "[Reflect LLM   ]";
-            case REFLECTION_COMPLETED -> "[Reflect Result]";
-            case AGENT_COMPLETED      -> "[Agent Done    ]";
-            case TOKEN_USAGE          -> "[Token Usage   ]";
-            case CAPABILITY_TOKEN_USAGE -> "[Cap Token Usage]";
-            case TASK_TOKEN_SUMMARY    -> "[Task Token Usage]";
-        };
-        return String.format("%s R%d %s", prefix, event.getRound(), event.getText());
-    }
-
     @Override
     public void onEvent(AgentEvent event) {
         System.out.println(format(event));
