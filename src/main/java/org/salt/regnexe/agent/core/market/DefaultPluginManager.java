@@ -79,9 +79,12 @@ import java.util.stream.Stream;
 @Slf4j
 public class DefaultPluginManager implements PluginManager {
 
-    private final List<String> directories = new ArrayList<>();
-    private final List<String> packages    = new ArrayList<>();
-    private final List<Object> beans       = new ArrayList<>();
+    private final List<String> directories           = new ArrayList<>();
+    private final List<String> packages              = new ArrayList<>();
+    private final List<Object> beans                 = new ArrayList<>();
+    private final List<Tool> tools                   = new ArrayList<>();
+    private final List<SkillConfig> skillConfigs     = new ArrayList<>();
+    private final List<SubAgentConfig> subAgentConfigs = new ArrayList<>();
 
     // ── fluent configuration ──────────────────────────────────────────────────
 
@@ -92,6 +95,24 @@ public class DefaultPluginManager implements PluginManager {
 
     public DefaultPluginManager register(Object pluginBean) {
         beans.add(pluginBean);
+        return this;
+    }
+
+    /** Register a pre-built Tool directly, without a {@code @Plugin} wrapper. */
+    public DefaultPluginManager registerTool(Tool tool) {
+        tools.add(tool);
+        return this;
+    }
+
+    /** Register a SKILL capability directly from a SkillConfig, without a SKILL.md file. */
+    public DefaultPluginManager registerSkill(SkillConfig config) {
+        skillConfigs.add(config);
+        return this;
+    }
+
+    /** Register a SUB_AGENT capability directly from a SubAgentConfig, without an AGENT.md file. */
+    public DefaultPluginManager registerSubAgent(SubAgentConfig config) {
+        subAgentConfigs.add(config);
         return this;
     }
 
@@ -112,6 +133,9 @@ public class DefaultPluginManager implements PluginManager {
         directories.forEach(dir -> loadDirectory(dir, marketplace));
         packages.forEach(pkg -> scanPackage(pkg, marketplace));
         beans.forEach(bean -> registerBean(bean, marketplace));
+        tools.forEach(tool -> registerToolCapability(tool, marketplace));
+        skillConfigs.forEach(config -> registerSkillCapability(config, marketplace));
+        subAgentConfigs.forEach(config -> registerSubAgentCapability(config, marketplace));
     }
 
     // ── directory loading ─────────────────────────────────────────────────────
@@ -315,6 +339,62 @@ public class DefaultPluginManager implements PluginManager {
                 .capabilities(caps)
                 .build());
         log.info("Registered plugin '{}' from class {}", ann.id(), instance.getClass().getSimpleName());
+    }
+
+    // ── code-first capability registration ────────────────────────────────────
+
+    /**
+     * capabilityId/pluginId default to the config's own {@code name} — each code-first
+     * registration is treated as its own single-capability plugin, mirroring how
+     * file-based plugins derive ids from {@code pluginId + "." + name}.
+     */
+    private void registerToolCapability(Tool tool, Marketplace marketplace) {
+        String name = requireName(tool.getName(), "Tool");
+        CapabilityDescriptor cap = CapabilityDescriptor.builder()
+                .capabilityId(name).pluginId(name)
+                .type(CapabilityType.MCP_TOOL)
+                .tool(tool)
+                .build();
+        installSingle(marketplace, name, tool.getDescription(), cap);
+        log.info("Registered tool '{}'", name);
+    }
+
+    private void registerSkillCapability(SkillConfig config, Marketplace marketplace) {
+        String name = requireName(config.getName(), "SkillConfig");
+        CapabilityDescriptor cap = CapabilityDescriptor.builder()
+                .capabilityId(name).pluginId(name)
+                .type(CapabilityType.SKILL)
+                .skillConfig(config)
+                .build();
+        installSingle(marketplace, name, config.getDescription(), cap);
+        log.info("Registered skill '{}'", name);
+    }
+
+    private void registerSubAgentCapability(SubAgentConfig config, Marketplace marketplace) {
+        String name = requireName(config.getName(), "SubAgentConfig");
+        CapabilityDescriptor cap = CapabilityDescriptor.builder()
+                .capabilityId(name).pluginId(name)
+                .type(CapabilityType.SUB_AGENT)
+                .subAgentConfig(config)
+                .build();
+        installSingle(marketplace, name, config.getDescription(), cap);
+        log.info("Registered subagent '{}'", name);
+    }
+
+    private void installSingle(Marketplace marketplace, String name, String description, CapabilityDescriptor cap) {
+        marketplace.install(PluginDescriptor.builder()
+                .pluginId(name).version("1.0")
+                .name(name).description(description)
+                .tags(List.of())
+                .capabilities(List.of(cap))
+                .build());
+    }
+
+    private String requireName(String name, String kind) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException(kind + ".name must not be blank — it becomes the capabilityId.");
+        }
+        return name;
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

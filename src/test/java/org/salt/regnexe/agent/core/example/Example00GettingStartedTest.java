@@ -17,6 +17,8 @@ package org.salt.regnexe.agent.core.example;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.salt.jlangchain.core.skill.SkillConfig;
+import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 import org.salt.jlangchain.rag.tools.annotation.AgentTool;
 import org.salt.regnexe.agent.core.RegnexeAgent;
@@ -103,6 +105,84 @@ public class Example00GettingStartedTest {
     }
 
     @Test
+    public void withToolShouldRegisterMcpToolCapability() {
+        Tool weatherTool = weatherTool();
+
+        SimpleMarketplace marketplace = new SimpleMarketplace();
+        marketplace.load(new DefaultPluginManager().registerTool(weatherTool));
+
+        CapabilityDescriptor cap = marketplace.resolveDescriptor("get_weather");
+
+        Assert.assertNotNull(cap);
+        Assert.assertEquals(CapabilityType.MCP_TOOL, cap.getType());
+        Assert.assertEquals("get_weather", cap.getPluginId());
+        Assert.assertEquals("get_weather", cap.getCapabilityId());
+        Assert.assertSame(weatherTool, cap.getTool());
+    }
+
+    @Test
+    public void withSkillShouldRegisterSkillCapability() {
+        SkillConfig config = SkillConfig.builder()
+                .name("travel_advisor")
+                .description("Advises on travel plans using weather and booking tools.")
+                .allowedTools(List.of("get_weather"))
+                .systemPrompt("You are a travel advisor. Use get_weather before recommending a plan.")
+                .build();
+
+        SimpleMarketplace marketplace = new SimpleMarketplace();
+        marketplace.load(new DefaultPluginManager().registerSkill(config));
+
+        CapabilityDescriptor cap = marketplace.resolveDescriptor("travel_advisor");
+
+        Assert.assertNotNull(cap);
+        Assert.assertEquals(CapabilityType.SKILL, cap.getType());
+        Assert.assertEquals("travel_advisor", cap.getPluginId());
+        Assert.assertSame(config, cap.getSkillConfig());
+    }
+
+    @Test
+    public void withSubAgentShouldRegisterSubAgentCapability() {
+        SubAgentConfig config = SubAgentConfig.builder()
+                .name("data_analyst")
+                .description("Analyzes raw data and reports findings.")
+                .model("inherit")
+                .systemPrompt("You are a data analyst. Summarize the given dataset.")
+                .build();
+
+        SimpleMarketplace marketplace = new SimpleMarketplace();
+        marketplace.load(new DefaultPluginManager().registerSubAgent(config));
+
+        CapabilityDescriptor cap = marketplace.resolveDescriptor("data_analyst");
+
+        Assert.assertNotNull(cap);
+        Assert.assertEquals(CapabilityType.SUB_AGENT, cap.getType());
+        Assert.assertEquals("data_analyst", cap.getPluginId());
+        Assert.assertSame(config, cap.getSubAgentConfig());
+    }
+
+    @Test
+    public void duplicateCapabilityIdShouldBeRejected() {
+        SimpleMarketplace marketplace = new SimpleMarketplace();
+        marketplace.load(new DefaultPluginManager().registerTool(weatherTool()));
+
+        Assert.assertThrows(IllegalStateException.class,
+                () -> marketplace.load(new DefaultPluginManager().registerTool(weatherTool())));
+    }
+
+    @Test
+    public void blankCapabilityNameShouldBeRejected() {
+        Tool blankNameTool = Tool.builder()
+                .name("")
+                .description("blank name tool")
+                .params("")
+                .func(arg -> "noop")
+                .build();
+
+        Assert.assertThrows(IllegalArgumentException.class,
+                () -> new SimpleMarketplace().load(new DefaultPluginManager().registerTool(blankNameTool)));
+    }
+
+    @Test
     public void readmeQuickStartAgentShouldFinish() {
         RegnexeAgent agent = regnexeAgentBuilder
                 .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
@@ -118,6 +198,107 @@ public class Example00GettingStartedTest {
         System.out.println("Rounds   : " + result.getState().getCurrentRound());
         System.out.println("FinalText:\n" + result.getFinalText());
         System.out.println("==================================================\n");
+
+        Assert.assertEquals(TaskStatus.FINISHED, result.getStatus());
+        Assert.assertNotNull(result.getFinalText());
+        Assert.assertFalse(result.getFinalText().isBlank());
+    }
+
+    @Test
+    public void withToolQuickStartAgentShouldFinish() {
+        RegnexeAgent agent = regnexeAgentBuilder
+                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withTool(weatherTool())
+                .withEventListener(new ConsoleEventListener())
+                .withMaxRounds(3)
+                .build();
+
+        AgentResult result = agent.execute("Check today's Beijing weather. Is it good for running?");
+
+        System.out.println("\n========== Example00 withTool Result ==========");
+        System.out.println("Status   : " + result.getStatus());
+        System.out.println("Rounds   : " + result.getState().getCurrentRound());
+        System.out.println("FinalText:\n" + result.getFinalText());
+        System.out.println("================================================\n");
+
+        Assert.assertEquals(TaskStatus.FINISHED, result.getStatus());
+        Assert.assertNotNull(result.getFinalText());
+        Assert.assertFalse(result.getFinalText().isBlank());
+    }
+
+    @Test
+    public void withSkillQuickStartAgentShouldFinish() {
+        SkillConfig travelAdvisor = SkillConfig.builder()
+                .name("travel_advisor")
+                .description("Gives outdoor-activity advice (e.g. running) based on the current weather for a city. " +
+                             "TRIGGER: Use when the user asks whether the weather is suitable for an outdoor activity.")
+                .systemPrompt("""
+                        You are an outdoor-activity advisor.
+                        1. Call get_weather for the city the user mentions.
+                        2. Based on the result, give a short, direct go/no-go recommendation.
+                        Keep the answer to 2-3 sentences.
+                        """)
+                .allowedTools(List.of("get_weather"))
+                .build();
+
+        RegnexeAgent agent = regnexeAgentBuilder
+                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withTool(weatherTool())
+                .withSkill(travelAdvisor)
+                .withEventListener(new ConsoleEventListener())
+                .withMaxRounds(3)
+                .build();
+
+        AgentResult result = agent.execute(
+                "I want to go for a run in Beijing today. Should I, and what should I watch out for?");
+
+        System.out.println("\n========== Example00 withSkill Result ==========");
+        System.out.println("Status   : " + result.getStatus());
+        System.out.println("Rounds   : " + result.getState().getCurrentRound());
+        System.out.println("FinalText:\n" + result.getFinalText());
+        System.out.println("=================================================\n");
+
+        Assert.assertEquals(TaskStatus.FINISHED, result.getStatus());
+        Assert.assertNotNull(result.getFinalText());
+        Assert.assertFalse(result.getFinalText().isBlank());
+    }
+
+    @Test
+    public void withSubAgentQuickStartAgentShouldFinish() {
+        Tool forecastTool = Tool.builder()
+                .name("get_weekly_forecast")
+                .description("Gets a 3-day weather outlook for a city.")
+                .params("city: String -- city name")
+                .func(city -> "Beijing 3-day outlook: Day1 sunny 22C, Day2 cloudy 19C, Day3 light rain 17C.")
+                .build();
+
+        SubAgentConfig forecastPlanner = SubAgentConfig.builder()
+                .name("forecast_planner")
+                .description("Plans which of the next 3 days is best for an outdoor run in a given city. " +
+                             "TRIGGER: Use when the user wants to pick the best day in the next few days for an outdoor activity.")
+                .model("inherit")
+                .systemPrompt("""
+                        You are a running-day planner.
+                        1. Call get_weekly_forecast for the city.
+                        2. Pick the single best day for a run and explain why in one sentence.
+                        """)
+                .ownTools(List.of(forecastTool))
+                .build();
+
+        RegnexeAgent agent = regnexeAgentBuilder
+                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withSubAgent(forecastPlanner)
+                .withEventListener(new ConsoleEventListener())
+                .withMaxRounds(3)
+                .build();
+
+        AgentResult result = agent.execute("Which day in the next 3 days is best for an outdoor run in Beijing?");
+
+        System.out.println("\n========== Example00 withSubAgent Result ==========");
+        System.out.println("Status   : " + result.getStatus());
+        System.out.println("Rounds   : " + result.getState().getCurrentRound());
+        System.out.println("FinalText:\n" + result.getFinalText());
+        System.out.println("====================================================\n");
 
         Assert.assertEquals(TaskStatus.FINISHED, result.getStatus());
         Assert.assertNotNull(result.getFinalText());

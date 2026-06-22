@@ -40,6 +40,9 @@ import org.salt.jlangchain.core.agent.memory.FullContext;
 import org.salt.jlangchain.core.history.memory.ConversationMemory;
 import org.salt.jlangchain.core.history.storage.ConversationStorage;
 import org.salt.jlangchain.core.history.storage.InMemoryConversationStorage;
+import org.salt.jlangchain.core.skill.SkillConfig;
+import org.salt.jlangchain.core.subagent.SubAgentConfig;
+import org.salt.jlangchain.rag.tools.Tool;
 import org.springframework.stereotype.Component;
 
 /**
@@ -139,6 +142,21 @@ public class RegnexeAgentBuilder {
     /** Convenience: load plugins from file-system directories without constructing a marketplace manually. */
     public Builder withDirectory(String... dirs) {
         return new Builder(flowEngine, chainActor).withDirectory(dirs);
+    }
+
+    /** Convenience: register one or more pre-built Tool objects directly as MCP_TOOL capabilities. */
+    public Builder withTool(Tool... tools) {
+        return new Builder(flowEngine, chainActor).withTool(tools);
+    }
+
+    /** Convenience: register a SKILL capability directly from a SkillConfig, without a SKILL.md file. */
+    public Builder withSkill(SkillConfig... configs) {
+        return new Builder(flowEngine, chainActor).withSkill(configs);
+    }
+
+    /** Convenience: register a SUB_AGENT capability directly from a SubAgentConfig, without an AGENT.md file. */
+    public Builder withSubAgent(SubAgentConfig... configs) {
+        return new Builder(flowEngine, chainActor).withSubAgent(configs);
     }
 
     // -------------------------------------------------------------------------
@@ -295,6 +313,53 @@ public class RegnexeAgentBuilder {
             DefaultPluginManager mgr = new DefaultPluginManager();
             for (String dir : dirs) {
                 mgr.addDirectory(dir);
+            }
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /** Convenience: register one or more pre-built Tool objects directly as MCP_TOOL capabilities. */
+        public Builder withTool(Tool... tools) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (Tool tool : tools) {
+                mgr.registerTool(tool);
+            }
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /**
+         * Convenience: register a SKILL capability directly from a SkillConfig, without a SKILL.md file.
+         * capabilityId defaults to {@code config.getName()} — it must be non-blank and unique,
+         * since it is shown verbatim to the planner LLM as the selectable capability id.
+         */
+        public Builder withSkill(SkillConfig... configs) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (SkillConfig config : configs) {
+                mgr.registerSkill(config);
+            }
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /**
+         * Convenience: register a SUB_AGENT capability directly from a SubAgentConfig, without an AGENT.md file.
+         * capabilityId defaults to {@code config.getName()} — it must be non-blank and unique,
+         * since it is shown verbatim to the planner LLM as the selectable capability id.
+         */
+        public Builder withSubAgent(SubAgentConfig... configs) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (SubAgentConfig config : configs) {
+                mgr.registerSubAgent(config);
             }
             this.marketplace.load(mgr);
             return this;
