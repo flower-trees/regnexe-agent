@@ -25,6 +25,7 @@ import org.salt.regnexe.agent.core.llm.Vendor;
 import org.salt.regnexe.agent.core.market.DefaultPluginManager;
 import org.salt.regnexe.agent.core.market.Marketplace;
 import org.salt.regnexe.agent.core.market.SimpleMarketplace;
+import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.DefaultResultComposer;
 import org.salt.regnexe.agent.core.task.ResultComposer;
 import org.salt.regnexe.agent.core.task.store.InMemoryTaskStore;
@@ -132,6 +133,11 @@ public class RegnexeAgentBuilder {
     /** Convenience: register one or more {@code @Plugin} beans without constructing a marketplace manually. */
     public Builder withPlugin(Object... pluginBeans) {
         return new Builder(flowEngine, chainActor).withPlugin(pluginBeans);
+    }
+
+    /** Convenience: install one or more pre-built PluginDescriptor objects without constructing a marketplace manually. */
+    public Builder withPlugin(PluginDescriptor... descriptors) {
+        return new Builder(flowEngine, chainActor).withPlugin(descriptors);
     }
 
     /** Convenience: scan packages for {@code @Plugin} classes without constructing a marketplace manually. */
@@ -291,6 +297,17 @@ public class RegnexeAgentBuilder {
                 mgr.register(bean);
             }
             this.marketplace.load(mgr);
+            return this;
+        }
+
+        /** Convenience: install one or more pre-built PluginDescriptor objects without constructing a marketplace manually. */
+        public Builder withPlugin(PluginDescriptor... descriptors) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            for (PluginDescriptor descriptor : descriptors) {
+                this.marketplace.install(descriptor);
+            }
             return this;
         }
 
