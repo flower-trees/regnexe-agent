@@ -179,41 +179,9 @@ RegnexeAgent agent = regnexeAgentBuilder
 
 ---
 
-## 3. The Plugin concept: `@Plugin`
+## 3. Plugins: concept and packaging
 
-Once a tool collection grows past a quick script, package it as a named, versioned, taggable unit instead of one-off `Tool` objects. The two getting-started tools become `@AgentTool` methods on one `@Plugin` class — same capabilities, loaded via `withPlugin(...)`. See [`ExampleReadme04PluginAnnotationTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme04PluginAnnotationTest.java).
-
-```java
-@Plugin(id = "weather", name = "Weather Plugin", description = "Weather and air quality queries")
-public class WeatherPlugin {
-
-    @AgentTool("Get today's weather for a city.")
-    public String getWeather(String city) {
-        return "Beijing: sunny, 22 C.";
-    }
-
-    @AgentTool("Get today's air quality index (AQI) for a city.")
-    public String getAirQuality(String city) {
-        return "Beijing: AQI 35, excellent air quality.";
-    }
-}
-```
-
-```java
-AgentResult result = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withPlugin(new WeatherPlugin())
-    .build()
-    .execute("Check today's weather and air quality in Beijing, then tell me if it's good for outdoor running.");
-```
-
----
-
-## 4. Plugin packaging
-
-### Code-first: bundle a tool, a skill, and a sub-agent together
-
-`PluginDescriptor.builder()` has `tool(...)`, `skillConfig(...)`, and `subAgentConfig(...)` — each wraps the raw config into a `CapabilityDescriptor` automatically, id'd as `pluginId + "." + name`. One call bundles a whole mixed-type plugin instead of hand-building each `CapabilityDescriptor` separately. See [`ExampleReadme05PluginPackagingTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme05PluginPackagingTest.java).
+A plugin is a named, versioned, taggable bundle of one or more capabilities — tools, skills, and sub-agents alike — sharing a single `pluginId`. Every loading channel in this README (code-first, `@Plugin` annotations, package scan, file-system directories) ultimately builds the same thing: a `PluginDescriptor` holding one or more `CapabilityDescriptor`s. The most explicit way to build one by hand is `PluginDescriptor.builder()`, which has `tool(...)`, `skillConfig(...)`, and `subAgentConfig(...)` — each wraps the raw config into a `CapabilityDescriptor` automatically, id'd as `pluginId + "." + name`. One call bundles a whole mixed-type plugin instead of hand-building each `CapabilityDescriptor` separately. See [`ExampleReadme05PluginPackagingTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme05PluginPackagingTest.java).
 
 ```java
 PluginDescriptor tripPlugin = PluginDescriptor.builder()
@@ -231,15 +199,86 @@ regnexeAgentBuilder.withPlugin(tripPlugin) ...
 
 > A Skill's `allowedTools` must reference the tool's *full* capability id. If the tool and the skill share a `pluginId` here, that id is `"trip-plugin.get_weather"`, not bare `"get_weather"`.
 
-### Other loading channels
+---
 
-**Package scan** — auto-discover `@Plugin` classes on the classpath (best for large plugin libraries):
+## 4. `@Plugin` and its annotation siblings
+
+For Java classes, annotations build the same `PluginDescriptor` without manual `.tool()`/`.skillConfig()` calls. The two getting-started tools become `@AgentTool` methods on one `@Plugin` class. `@AgentSkill` and `@AgentSubAgent` — the same Skill and Sub-Agent from section 2, as annotations instead of `SkillConfig`/`SubAgentConfig` builders — nest as `public static` inner classes of that same `@Plugin` class, bundling everything under one `pluginId`: one `withPlugin(new WeatherPlugin())` call registers two tools, a skill, and a sub-agent at once. `@AgentSkill` is a pure marker (a Skill never owns tools, so no methods needed); `@AgentSubAgent` reuses `@AgentTool` for its private `ownTools`, exactly like the outer `@Plugin` does for MCP_TOOL. See [`ExampleReadme04PluginAnnotationTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme04PluginAnnotationTest.java).
+
+```java
+@Plugin(id = "weather", name = "Weather Plugin",
+        description = "Weather, air quality, travel advice, and trip cost estimation")
+public class WeatherPlugin {
+
+    @AgentTool("Get today's weather for a city.")
+    public String getWeather(String city) {
+        return "Beijing: sunny, 22 C.";
+    }
+
+    @AgentTool("Get today's air quality index (AQI) for a city.")
+    public String getAirQuality(String city) {
+        return "Beijing: AQI 35, excellent air quality.";
+    }
+
+    @AgentSkill(
+        id = "travel_advisor",
+        description = "Gives outdoor-activity advice based on the current weather for a city. " +
+                       "TRIGGER: Use when the user asks whether the weather is suitable for an outdoor activity.",
+        systemPrompt = """
+                You are an outdoor-activity advisor.
+                1. Call get_weather for the city the user mentions.
+                2. Based on the result, give a short, direct go/no-go recommendation.
+                """,
+        allowedTools = {"weather.get_weather"}   // full capability id within this plugin
+    )
+    public static class TravelAdvisorSkill {
+        // No @AgentTool methods — a Skill can't own private tools.
+    }
+
+    @AgentSubAgent(
+        id = "expense_estimator",
+        description = "Estimates the total cost of a business trip. " +
+                       "TRIGGER: Use when the user asks for a trip budget or cost estimate.",
+        model = "aliyun:qwen-plus",
+        systemPrompt = """
+                You are a travel expense estimator.
+                1. Call estimate_trip_cost with the trip length and destination.
+                2. Report the total and a one-line breakdown.
+                """
+    )
+    public static class ExpenseEstimatorSubAgent {
+
+        @AgentTool("Estimates total cost for a multi-day business trip.")
+        public String estimateTripCost(int days, String city) {
+            return "3-day Chengdu trip estimate: 3600 CNY total.";
+        }
+    }
+}
+```
+
+```java
+AgentResult result = regnexeAgentBuilder
+    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withPlugin(new WeatherPlugin())
+    .build()
+    .execute("Check today's weather and air quality in Beijing, then tell me if it's good for outdoor running.");
+```
+
+`@AgentSkill`/`@AgentSubAgent` also work standalone (not nested) — `withPlugin(new TravelAdvisorSkill())` on its own registers it as its own single-capability plugin, the same way the code-first `withSkill(SkillConfig)`/`withSubAgent(SubAgentConfig)` from section 2 do.
+
+### Package scan
+
+Auto-discover `@Plugin`/`@AgentSkill`/`@AgentSubAgent` classes on the classpath instead of constructing them by hand (best for large plugin libraries):
 
 ```java
 regnexeAgentBuilder.withScanPackages("com.example.plugins") ...
 ```
 
-**File-system directory** — best for ops-managed, hot-pluggable plugins:
+---
+
+## 5. File-system directory loading
+
+Best for ops-managed, hot-pluggable plugins — no annotations or code at all, just files on disk:
 
 ```
 /opt/regnexe-plugins/
@@ -301,7 +340,7 @@ You are an outdoor activity planner. Use weather and user needs to produce a det
 
 ---
 
-## 5. Marketplace
+## 6. Marketplace
 
 Every loading channel above ends the same way: capabilities land in a `Marketplace`. The default `SimpleMarketplace` is an in-memory index — install, search, resolve. See [`ExampleReadme06MarketplaceTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme06MarketplaceTest.java).
 
@@ -331,7 +370,7 @@ regnexeAgentBuilder.withPluginMarket(new DbBackedMarketplace()) ...
 
 ---
 
-## 6. Three layers of context memory
+## 7. Three layers of context memory
 
 Three independent, independently-replaceable layers, each solving a different problem. See [`ExampleReadme07ThreeLayerMemoryTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme07ThreeLayerMemoryTest.java).
 
@@ -375,7 +414,7 @@ RegnexeAgent agent = regnexeAgentBuilder
 
 ---
 
-## 7. Pause & Resume
+## 8. Pause & Resume
 
 `pause()` is thread-safe and can be called from any thread while a task is running. The task transitions to `PAUSED` and persists in the configured `TaskStore`; `resume()` picks up the most recent resumable task for that session and continues with extra context. See [`ExampleReadme08PauseResumeTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme08PauseResumeTest.java).
 

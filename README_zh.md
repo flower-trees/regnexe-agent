@@ -51,11 +51,12 @@ CapabilityDescriptor
 
 - [1. 快速开始：多个 tool，一个循环](#1-快速开始多个-tool一个循环)
 - [2. 进阶：Skill 与 Sub-Agent](#2-进阶skill-与-sub-agent)
-- [3. 插件概念：@Plugin](#3-插件概念plugin)
-- [4. 插件打包方式](#4-插件打包方式)
-- [5. Marketplace](#5-marketplace)
-- [6. 三层上下文记忆](#6-三层上下文记忆)
-- [7. 暂停与恢复](#7-暂停与恢复)
+- [3. 插件概念与打包](#3-插件概念与打包)
+- [4. @Plugin 及其他注解方式](#4-plugin-及其他注解方式)
+- [5. 文件系统目录加载](#5-文件系统目录加载)
+- [6. Marketplace](#6-marketplace)
+- [7. 三层上下文记忆](#7-三层上下文记忆)
+- [8. 暂停与恢复](#8-暂停与恢复)
 - [参考文档](#参考文档)
 
 ## 1. 快速开始：多个 tool，一个循环
@@ -189,39 +190,9 @@ RegnexeAgent agent = regnexeAgentBuilder
 | 工具 | 按能力 id 借用（`allowedTools`） | 私有（`ownTools`），外部不可见 |
 | 适合场景 | 和主 Agent 紧密耦合、需要省成本的可重复子工作流 | 需要隔离或独立模型的独立子任务 |
 
-## 3. 插件概念：@Plugin
+## 3. 插件概念与打包
 
-当工具集合超出"写个脚本"的规模，就应该把它打包成一个有名字、有版本、可打标签的单元，而不是临时构造一堆 `Tool` 对象。入门示例里的两个工具，这里变成一个 `@Plugin` 类上的两个 `@AgentTool` 方法——能力完全一样，通过 `withPlugin(...)` 加载。代码见 [`ExampleReadme04PluginAnnotationTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme04PluginAnnotationTest.java)。
-
-```java
-@Plugin(id = "weather", name = "天气插件", description = "天气和空气质量查询")
-public class WeatherPlugin {
-
-    @AgentTool("获取指定城市今天的天气。")
-    public String getWeather(String city) {
-        return "北京：晴，22°C。";
-    }
-
-    @AgentTool("获取指定城市今天的空气质量指数（AQI）。")
-    public String getAirQuality(String city) {
-        return "北京：AQI 35，空气质量优。";
-    }
-}
-```
-
-```java
-AgentResult result = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withPlugin(new WeatherPlugin())
-    .build()
-    .execute("查询北京今天的天气和空气质量，告诉我是否适合户外跑步");
-```
-
-## 4. 插件打包方式
-
-### 代码打包：把一个 tool、一个 skill、一个 subagent 打包在一起
-
-`PluginDescriptor.builder()` 有 `tool(...)`、`skillConfig(...)`、`subAgentConfig(...)` 三个方法——每个都会自动把原始配置包装成 `CapabilityDescriptor`，id 为 `pluginId + "." + name`。一次调用就能打包一个混合类型的插件，不需要再手动一个个构造 `CapabilityDescriptor`。代码见 [`ExampleReadme05PluginPackagingTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme05PluginPackagingTest.java)。
+插件是一个有名字、有版本、可打标签的能力包——tool、skill、subagent 都可以装进去，共用同一个 `pluginId`。本文档里的每一种加载方式（代码直打包、`@Plugin` 注解、包扫描、文件系统目录）最终都是在构造同一个东西：一个装着一个或多个 `CapabilityDescriptor` 的 `PluginDescriptor`。最直接的手动构造方式是 `PluginDescriptor.builder()`，它有 `tool(...)`、`skillConfig(...)`、`subAgentConfig(...)` 三个方法——每个都会自动把原始配置包装成 `CapabilityDescriptor`，id 为 `pluginId + "." + name`。一次调用就能打包一个混合类型的插件，不需要再手动一个个构造 `CapabilityDescriptor`。代码见 [`ExampleReadme05PluginPackagingTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme05PluginPackagingTest.java)。
 
 ```java
 PluginDescriptor tripPlugin = PluginDescriptor.builder()
@@ -239,15 +210,81 @@ regnexeAgentBuilder.withPlugin(tripPlugin) ...
 
 > Skill 的 `allowedTools` 必须引用工具的**完整**能力 id。如果 tool 和 skill 共用同一个 `pluginId`，这里的 id 就是 `"trip-plugin.get_weather"`，不是裸的 `"get_weather"`。
 
-### 其他加载方式
+## 4. @Plugin 及其他注解方式
 
-**包扫描**——自动发现 classpath 上的 `@Plugin` 类，适合插件数量较多的场景：
+对 Java 类而言，注解可以构造出同样的 `PluginDescriptor`，不需要手写 `.tool()`/`.skillConfig()`。入门示例里的两个工具，变成一个 `@Plugin` 类上的两个 `@AgentTool` 方法。`@AgentSkill` 和 `@AgentSubAgent`——第 2 节里同样的 Skill 和 Sub-Agent，只是用注解代替 `SkillConfig`/`SubAgentConfig` 的 builder——可以作为这个 `@Plugin` 类的 `public static` 内部类嵌套进去，全部打包在同一个 `pluginId` 下：一次 `withPlugin(new WeatherPlugin())` 调用就能同时注册两个 tool、一个 skill 和一个 subagent。`@AgentSkill` 是纯标记注解（Skill 永远不拥有工具，不需要任何方法）；`@AgentSubAgent` 复用 `@AgentTool` 来声明私有 `ownTools`，跟外层 `@Plugin` 扫描 MCP_TOOL 的方式完全一样。代码见 [`ExampleReadme04PluginAnnotationTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme04PluginAnnotationTest.java)。
+
+```java
+@Plugin(id = "weather", name = "天气插件", description = "天气、空气质量、出行建议与费用估算")
+public class WeatherPlugin {
+
+    @AgentTool("获取指定城市今天的天气。")
+    public String getWeather(String city) {
+        return "北京：晴，22°C。";
+    }
+
+    @AgentTool("获取指定城市今天的空气质量指数（AQI）。")
+    public String getAirQuality(String city) {
+        return "北京：AQI 35，空气质量优。";
+    }
+
+    @AgentSkill(
+        id = "travel_advisor",
+        description = "根据城市当前天气给出户外活动建议。" +
+                      "TRIGGER: 用户询问天气是否适合户外活动时使用。",
+        systemPrompt = """
+                你是一个户外活动顾问。
+                1. 调用 get_weather 查询用户提到的城市。
+                2. 根据结果给出简短、直接的"去/不去"建议。
+                """,
+        allowedTools = {"weather.get_weather"}   // 插件内的完整能力 id
+    )
+    public static class TravelAdvisorSkill {
+        // 不需要 @AgentTool 方法——Skill 不能拥有私有工具。
+    }
+
+    @AgentSubAgent(
+        id = "expense_estimator",
+        description = "估算商务出行的总花费。" +
+                      "TRIGGER: 用户询问行程预算或费用估算时使用。",
+        model = "aliyun:qwen-plus",
+        systemPrompt = """
+                你是一个出行费用估算师。
+                1. 调用 estimate_trip_cost，传入行程天数和目的地。
+                2. 汇报总价和一行明细。
+                """
+    )
+    public static class ExpenseEstimatorSubAgent {
+
+        @AgentTool("估算多日商务出行的总花费。")
+        public String estimateTripCost(int days, String city) {
+            return "3天成都行程预估：共3600元人民币。";
+        }
+    }
+}
+```
+
+```java
+AgentResult result = regnexeAgentBuilder
+    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withPlugin(new WeatherPlugin())
+    .build()
+    .execute("查询北京今天的天气和空气质量，告诉我是否适合户外跑步");
+```
+
+`@AgentSkill`/`@AgentSubAgent` 也可以单独使用（不嵌套）——单独 `withPlugin(new TravelAdvisorSkill())` 会把它注册成自己独立的单能力插件，效果等同于第 2 节里代码直注册的 `withSkill(SkillConfig)`/`withSubAgent(SubAgentConfig)`。
+
+### 包扫描
+
+自动发现 classpath 上的 `@Plugin`/`@AgentSkill`/`@AgentSubAgent` 类，不需要手动构造，适合插件数量较多的场景：
 
 ```java
 regnexeAgentBuilder.withScanPackages("com.example.plugins") ...
 ```
 
-**文件系统目录**——适合运维管理、热插拔插件：
+## 5. 文件系统目录加载
+
+适合运维管理、热插拔插件——不需要任何注解或代码，纯靠磁盘上的文件：
 
 ```
 /opt/regnexe-plugins/
@@ -313,7 +350,7 @@ description: "户外活动规划子 Agent。TRIGGER: 需要规划完整行程时
 
 </details>
 
-## 5. Marketplace
+## 6. Marketplace
 
 上面所有加载方式最终都走向同一个地方：能力进入一个 `Marketplace`。默认的 `SimpleMarketplace` 是内存索引——install、search、resolve。代码见 [`ExampleReadme06MarketplaceTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme06MarketplaceTest.java)。
 
@@ -341,7 +378,7 @@ class DbBackedMarketplace implements Marketplace {
 regnexeAgentBuilder.withPluginMarket(new DbBackedMarketplace()) ...
 ```
 
-## 6. 三层上下文记忆
+## 7. 三层上下文记忆
 
 三层独立、独立可替换的记忆，各自解决不同的问题。代码见 [`ExampleReadme07ThreeLayerMemoryTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme07ThreeLayerMemoryTest.java)。
 
@@ -383,7 +420,7 @@ RegnexeAgent agent = regnexeAgentBuilder
     .build();
 ```
 
-## 7. 暂停与恢复
+## 8. 暂停与恢复
 
 `pause()` 可以从任意线程调用，线程安全。当前执行会被标记为 `PAUSED` 并持久化到配置的 `TaskStore`；`resume()` 会找到该 session 下最近一个可恢复任务，带着新上下文继续。代码见 [`ExampleReadme08PauseResumeTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme08PauseResumeTest.java)。
 
