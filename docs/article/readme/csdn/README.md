@@ -9,7 +9,7 @@
 
 完整文档：[English README](https://github.com/flower-trees/regnexe-agent/blob/master/README.md) ｜ [中文文档](https://github.com/flower-trees/regnexe-agent/blob/master/README_zh.md)
 
-每篇对应仓库 [`src/test/java/.../example/readme/ExampleReadme*Test.java`](https://github.com/flower-trees/regnexe-agent/tree/master/src/test/java/org/salt/regnexe/agent/core/example/readme) 中一个真实可运行的示例，代码全部来自仓库本身，不是 PPT 代码。
+每篇对应仓库 [`src/test/java/.../example/readme/ExampleReadme*Test.java`](https://github.com/flower-trees/regnexe-agent/tree/master/src/test/java/org/salt/regnexe/agent/core/example/readme) 中一个真实可运行的示例，代码全部来自仓库本身，不是 PPT 代码。同一套内容还有 [知乎](https://github.com/flower-trees/regnexe-agent/tree/master/docs/article/readme/zhihu)、[掘金](https://github.com/flower-trees/regnexe-agent/tree/master/docs/article/readme/juejin)、[开源中国](https://github.com/flower-trees/regnexe-agent/tree/master/docs/article/readme/oschina) 适配版本。
 
 | # | 文章 | 对应示例 |
 |---|------|----------|
