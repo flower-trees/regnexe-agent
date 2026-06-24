@@ -58,7 +58,7 @@ import java.util.stream.Stream;
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
-public class Example08CodeWorkspaceComponentTest {
+public class Example09CodeWorkspaceComponentTest {
 
     @Autowired
     private RegnexeAgentBuilder regnexeAgentBuilder;
