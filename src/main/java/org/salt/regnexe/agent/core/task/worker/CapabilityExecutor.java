@@ -36,6 +36,7 @@ import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
+import org.salt.jlangchain.core.agent.AgentAbortException;
 import org.salt.jlangchain.core.agent.AgentStoppedException;
 import org.salt.jlangchain.core.agent.McpAgentExecutor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
@@ -153,6 +154,15 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             state.setStatus(TaskStatus.PAUSED);
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED"));
             log.debug("Round {}: execution paused", state.getCurrentRound());
+        } catch (AgentAbortException e) {
+            output.setStatus(ExecutionStatus.FAILED);
+            String lastResult = state.getLastToolResult();
+            output.setFinalText(lastResult != null
+                    ? "Incomplete (" + e.getMessage() + "). Last known result: " + lastResult
+                    : e.getMessage());
+            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
+                    "FAILED | " + e.getMessage()));
+            log.warn("Round {}: execution aborted: {}", state.getCurrentRound(), e.getMessage());
         } catch (Exception e) {
             output.setStatus(ExecutionStatus.FAILED);
             output.setFinalText(e.getMessage());
