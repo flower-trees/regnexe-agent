@@ -414,7 +414,37 @@ RegnexeAgent agent = regnexeAgentBuilder
 
 ---
 
-## 8. Pause & Resume
+## 8. Observability
+
+Every Search → Plan → Execute → Reflect step — and the inner tool-calling loop inside Execute — emits an `AgentEvent` through whichever `AgentEventListener` you configure via `withEventListener(...)`. `EventType` pairs a `*_STARTED`/`*_COMPLETED` event for each outer step, plus inner-loop hooks (`TOOL_CALLED`/`TOOL_RESULT`/`LLM_RESPONDED`), phase-specific LLM hooks (`PLAN_LLM_RESPONDED`, `REFLECT_LLM_RESPONDED`, `SKILL_LLM_RESPONDED`, `AGENT_LLM_RESPONDED`), and token-usage events (`TOKEN_USAGE`, `CAPABILITY_TOKEN_USAGE`, `TASK_TOKEN_SUMMARY`). See [`ExampleReadme09ObservabilityTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme09ObservabilityTest.java).
+
+`ConsoleEventListener` — the default used throughout this README — prints to stdout, good for local dev and tests:
+
+```java
+RegnexeAgent agent = regnexeAgentBuilder
+    .withTool(weatherTool)
+    .withEventListener(new ConsoleEventListener())
+    .build();
+```
+
+In production, swap in `Slf4jEventListener` instead: same event formatting, but routed through SLF4J so tracing flows into your application's existing logging pipeline rather than a separate println stream:
+
+```java
+regnexeAgentBuilder.withEventListener(new Slf4jEventListener()) ...
+```
+
+Both extend `AbstractEventListener`, which provides two constructor flags to suppress noisy event groups without writing a custom `shouldHandle`:
+
+```java
+new ConsoleEventListener(false, false);   // showTokenEvents=false, showLlmEvents=false
+new Slf4jEventListener(true, true);       // show everything, including token usage and raw LLM text
+```
+
+Write your own listener by extending `AbstractEventListener` (or implementing `AgentEventListener` directly for full control over filtering) — override `onEvent`, and optionally `shouldHandle` to pick exactly which `EventType`s you care about.
+
+---
+
+## 9. Pause & Resume
 
 `pause()` is thread-safe and can be called from any thread while a task is running. The task transitions to `PAUSED` and persists in the configured `TaskStore`; `resume()` picks up the most recent resumable task for that session and continues with extra context. See [`ExampleReadme08PauseResumeTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme08PauseResumeTest.java).
 

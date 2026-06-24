@@ -56,7 +56,8 @@ CapabilityDescriptor
 - [5. 文件系统目录加载](#5-文件系统目录加载)
 - [6. Marketplace](#6-marketplace)
 - [7. 三层上下文记忆](#7-三层上下文记忆)
-- [8. 暂停与恢复](#8-暂停与恢复)
+- [8. 可观测性](#8-可观测性)
+- [9. 暂停与恢复](#9-暂停与恢复)
 - [参考文档](#参考文档)
 
 ## 1. 快速开始：多个 tool，一个循环
@@ -420,7 +421,35 @@ RegnexeAgent agent = regnexeAgentBuilder
     .build();
 ```
 
-## 8. 暂停与恢复
+## 8. 可观测性
+
+Search → Plan → Execute → Reflect 的每一步——以及 Execute 内部的工具调用循环——都会通过你用 `withEventListener(...)` 配置的 `AgentEventListener` 发出一个 `AgentEvent`。`EventType` 给每个外层步骤配了一对 `*_STARTED`/`*_COMPLETED` 事件，加上内层循环的 `TOOL_CALLED`/`TOOL_RESULT`/`LLM_RESPONDED`、按阶段区分的 LLM 钩子（`PLAN_LLM_RESPONDED`、`REFLECT_LLM_RESPONDED`、`SKILL_LLM_RESPONDED`、`AGENT_LLM_RESPONDED`），以及 Token 用量事件（`TOKEN_USAGE`、`CAPABILITY_TOKEN_USAGE`、`TASK_TOKEN_SUMMARY`）。代码见 [`ExampleReadme09ObservabilityTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme09ObservabilityTest.java)。
+
+`ConsoleEventListener`——本文档默认一直在用的——打印到 stdout，适合本地开发和测试：
+
+```java
+RegnexeAgent agent = regnexeAgentBuilder
+    .withTool(weatherTool)
+    .withEventListener(new ConsoleEventListener())
+    .build();
+```
+
+生产环境换成 `Slf4jEventListener` 即可：格式化逻辑完全一样，但通过 SLF4J 输出，这样追踪日志会汇入你应用现有的日志管道，而不是独立的一条 println 输出流：
+
+```java
+regnexeAgentBuilder.withEventListener(new Slf4jEventListener()) ...
+```
+
+两者都继承自 `AbstractEventListener`，它提供了两个构造参数用来屏蔽噪音事件组，不需要自己写 `shouldHandle`：
+
+```java
+new ConsoleEventListener(false, false);   // showTokenEvents=false, showLlmEvents=false
+new Slf4jEventListener(true, true);       // 全部显示，包括 token 用量和原始 LLM 文本
+```
+
+想写自己的监听器，继承 `AbstractEventListener`（或者直接实现 `AgentEventListener` 获得完全的过滤控制权）——重写 `onEvent`，需要的话再重写 `shouldHandle` 精确挑选关心的 `EventType`。
+
+## 9. 暂停与恢复
 
 `pause()` 可以从任意线程调用，线程安全。当前执行会被标记为 `PAUSED` 并持久化到配置的 `TaskStore`；`resume()` 会找到该 session 下最近一个可恢复任务，带着新上下文继续。代码见 [`ExampleReadme08PauseResumeTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme08PauseResumeTest.java)。
 
