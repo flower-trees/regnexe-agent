@@ -1,207 +1,308 @@
 <p align="center">
   <h1 align="center">⚡ Regnexe</h1>
-  <p align="center"><b>Multi-round Agent orchestration for Java and Spring Boot</b></p>
-  <p align="center">Search, plan, execute, reflect, and compose enterprise workflows from tools, skills, and sub-agents.</p>
+  <p align="center"><b>One Regnexe to Rule All Tasks</b></p>
+  <p align="center">Java Enterprise Agent Framework — plug in, reason, ship.</p>
 </p>
 
 <p align="center">
   <a href="https://central.sonatype.com/artifact/io.github.flower-trees/regnexe-agent"><img src="https://img.shields.io/maven-central/v/io.github.flower-trees/regnexe-agent?label=Maven%20Central" alt="Maven Central"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
   <img src="https://img.shields.io/badge/Java-17%2B-orange" alt="Java 17+"/>
-  <img src="https://img.shields.io/badge/Spring%20Boot-3.2%2B-green" alt="Spring Boot 3.2+"/>
+  <img src="https://img.shields.io/badge/Spring%20Boot-3.x-green" alt="Spring Boot 3.x"/>
 </p>
 
 ---
 
-Regnexe is not a thin wrapper around one LLM tool call. It runs a full **Search -> Plan -> Execute -> Reflect** loop: discover relevant capabilities, plan the next step, execute tools or nested agents, then decide whether to finish, retry, continue, pause, or escalate.
+Most LLM integrations stop at a single tool call. Regnexe runs a full **Search → Plan → Execute → Reflect** loop — selecting the right capabilities, replanning across multiple rounds, and adapting until the goal is met or it hands back to you.
 
 ```
 User Goal
-    |
-    v
-[Search -> Plan -> Execute -> Reflect] x N rounds
-    |
-    v
-AgentResult
-
-Marketplace
-    |
-    +-- @Plugin beans
-    +-- package scan
-    +-- file-system plugin directories
-    +-- programmatic descriptors from DB/API/runtime config
-    |
-    v
-CapabilityDescriptor
-    |
-    +-- MCP_TOOL   single callable function or script
-    +-- SKILL      nested agent with its own prompt and private tools
-    +-- SUB_AGENT  autonomous agent with its own reasoning loop
+    │
+    ▼
+[Search → Plan → Execute → Reflect] × N rounds → AgentResult
+                    │
+                    ▼
+          Plugin Marketplace
+    ┌───────────────────────────────┐
+    │  Loading channels:            │
+    │   code-first (tool/skill/     │
+    │   subagent) · @Plugin bean ·  │
+    │   package scan · file dir     │
+    │               ↓               │
+    │  CapabilityDescriptor         │  ← unified capability API
+    │  ┌─────────┬───────┬────────┐ │
+    │  │MCP Tool │ Skill │SubAgent│ │
+    │  └─────────┴───────┴────────┘ │
+    └───────────────────────────────┘
 ```
 
-## Highlights
+**What sets it apart:**
+- 🔄 **Multi-round reasoning** — replans and retries, not just one tool call
+- ⏸ **Pause & Resume** — interrupt from any thread, continue with new context
+- 🧩 **Plugin marketplace** — add/remove capabilities without touching agent code
+- 🏢 **Enterprise-grade** — session memory, task ledger, swappable context strategy, zero Spring intrusion
 
-- **Multi-round reasoning**: replans from intermediate results instead of stopping after one call.
-- **Unified marketplace**: Java beans, scanned classes, script directories, and dynamic definitions all become `CapabilityDescriptor` objects.
-- **Private tools for nested agents**: attach `ownTools` to a Skill or Sub-Agent without exposing those tools to the master agent.
-- **Per-capability model control**: Sub-Agents can inherit the parent model or use their own model with vendor-specific kwargs.
-- **Built-in observability**: event hooks for outer-loop phases, LLM responses, tool calls, per-capability token usage, and task-level token summaries.
-- **Enterprise extension points**: pause/resume, task persistence, session memory, custom result composers, custom model providers, and Spring Boot auto-configuration.
+This README goes from "one tool call" to the full framework, one layer at a time. Every code block below is a real, runnable test under [`src/test/java/.../example/readme/ExampleReadme*Test.java`](src/test/java/org/salt/regnexe/agent/core/example/readme).
 
-## Contents
+---
 
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Plugin Loading](#plugin-loading)
-- [Sub-Agent Model Control](#sub-agent-model-control)
-- [Events and Token Tracking](#events-and-token-tracking)
-- [Pause and Resume](#pause-and-resume)
-- [Session Memory](#session-memory)
-- [Reference](#reference)
+## 1. Quick Start: multiple tools, one loop
 
-## Quick Start
-
-### 1. Add the dependency
+### Add dependency
 
 ```xml
 <dependency>
     <groupId>io.github.flower-trees</groupId>
     <artifactId>regnexe-agent</artifactId>
-    <version>0.1.1</version>
+    <version>0.1.2</version>
 </dependency>
 ```
 
-### 2. Configure model keys
+### Configure your LLM
 
 ```yaml
-# application.yml
+# application.yml — choose one
 models:
   aliyun:
-    chat-key: ${ALIYUN_KEY}
+    chat-key: ${ALIYUN_KEY}      # Aliyun DashScope (deepseek-v4-flash, qwen, etc.)
   deepseek:
-    chat-key: ${DEEPSEEK_KEY}
+    chat-key: ${DEEPSEEK_KEY}    # DeepSeek official API
 ```
 
-Endpoint URLs are preconfigured. You can provide a vendor explicitly or pass a model name and let `DefaultModelProvider` route by model prefix.
+### Register tools and run
 
-### 3. Define a plugin
+`withTool(...)` registers pre-built `Tool` objects directly — no class, no annotation, fastest path to a running agent. See [`ExampleReadme01MultiToolTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme01MultiToolTest.java).
 
 ```java
-@Plugin(id = "weather", name = "Weather Plugin", description = "Weather queries")
+Tool weatherTool = Tool.builder()
+    .name("get_weather")
+    .description("Get today's weather for a city.")
+    .params("city: String -- city name")
+    .func(city -> "Beijing: sunny, 22 C.")
+    .build();
+
+Tool airQualityTool = Tool.builder()
+    .name("get_air_quality")
+    .description("Get today's air quality index (AQI) for a city.")
+    .params("city: String -- city name")
+    .func(city -> "Beijing: AQI 35, excellent air quality.")
+    .build();
+
+AgentResult result = regnexeAgentBuilder
+    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withTool(weatherTool, airQualityTool)          // ← varargs, register as many as you need
+    .withEventListener(new ConsoleEventListener())
+    .build()
+    .execute("Check today's weather and air quality in Beijing, then tell me if it's good for outdoor running.");
+
+System.out.println(result.getFinalText());          // FINISHED
+```
+
+No `@EnableXxx`. No XML. `RegnexeAgentBuilder` is auto-configured by Spring Boot.
+
+`ConsoleEventListener` prints every step of the loop — Search finds candidates, Plan picks and orders them, Execute calls the tools, Reflect decides whether to finish:
+
+```
+[Agent Start   ] R0 Goal: Check today's weather and air quality in Beijing... | maxRounds: 3
+[Search Result ] R1 Found 2 capabilities: get_weather, get_air_quality
+[Plan Result   ] R1 Selected: [get_weather, get_air_quality] | Strategy: SYNTHESIZE | ...
+[TOOL Call     ] R1 get_weather {"city": "Beijing"}
+[TOOL Result   ] R1 get_weather -> Beijing: sunny, 22 C.
+[TOOL Call     ] R1 get_air_quality {"city": "Beijing"}
+[TOOL Result   ] R1 get_air_quality -> Beijing: AQI 35, excellent air quality.
+[Execute Result] R1 SUCCESS | Sunny, 22°C, AQI 35 — great conditions for a run.
+[Reflect Result] R1 FINISH — both readings obtained and the goal is fully answered.
+[Agent Done    ] R1 Status: FINISHED | Rounds: 1
+```
+
+---
+
+## 2. Going deeper: Skill vs Sub-Agent
+
+A single tool call only goes so far. Two richer capability types let you compose multi-step behavior, and they make opposite tradeoffs on purpose.
+
+### Skill — shares the parent's model and tools
+
+`SkillConfig` has no model field at all: a Skill **always inherits the parent agent's model**, and its `allowedTools` are capability ids that must already exist in the marketplace — it borrows, it doesn't own. Use a Skill for a focused, repeatable sub-workflow that should stay cheap and stay in lockstep with the main agent's model. See [`ExampleReadme02SkillTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme02SkillTest.java).
+
+```java
+SkillConfig travelAdvisor = SkillConfig.builder()
+    .name("travel_advisor")
+    .description("Calls get_weather for the city the user mentions and gives outdoor-activity advice based on the current weather. " +
+                 "TRIGGER: Use when the user asks whether the weather is suitable for an outdoor activity.")
+    .systemPrompt("""
+            You are an outdoor-activity advisor.
+            1. Call get_weather for the city the user mentions.
+            2. Based on the result, give a short, direct go/no-go recommendation.
+            """)
+    .allowedTools(List.of("get_weather"))   // borrowed by id, not owned
+    .build();
+
+RegnexeAgent agent = regnexeAgentBuilder
+    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withTool(weatherTool)     // the tool a Skill borrows must already be in the marketplace
+    .withSkill(travelAdvisor)
+    .build();
+```
+
+### Sub-Agent — owns its own model and private tools
+
+`SubAgentConfig.model(...)` can name a *different* model than the parent (or `"inherit"` to share it), and `ownTools` are **private** — never registered in the marketplace, so the outer agent can never call them directly. Use a Sub-Agent for an independent sub-task that needs its own reasoning loop, its own tools, or a cheaper/faster model. See [`ExampleReadme03SubAgentTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme03SubAgentTest.java).
+
+```java
+SubAgentConfig expenseEstimator = SubAgentConfig.builder()
+    .name("expense_estimator")
+    .description("Estimates the total cost of a business trip. " +
+                 "TRIGGER: Use when the user asks for a trip budget or cost estimate.")
+    .model("aliyun:qwen-plus")        // its own model, independent of the parent's default model
+    .systemPrompt("""
+            You are a travel expense estimator.
+            1. Call estimate_trip_cost with the trip length and destination.
+            2. Report the total and a one-line breakdown.
+            """)
+    .ownTools(List.of(estimateCostTool))   // private — invisible to the outer agent
+    .build();
+
+RegnexeAgent agent = regnexeAgentBuilder
+    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withSubAgent(expenseEstimator)
+    .build();
+```
+
+### Which one?
+
+| | Skill | Sub-Agent |
+|---|---|---|
+| Model | Always inherits the parent's | Own model, or `"inherit"` |
+| Tools | Borrowed by capability id (`allowedTools`) | Private (`ownTools`), invisible outside |
+| Best for | Cheap, repeatable sub-workflows tightly coupled to the main agent | Independent sub-tasks that need isolation or a different model |
+
+---
+
+## 3. Plugins: concept and packaging
+
+A plugin is a named, versioned, taggable bundle of one or more capabilities — tools, skills, and sub-agents alike — sharing a single `pluginId`. Every loading channel in this README (code-first, `@Plugin` annotations, package scan, file-system directories) ultimately builds the same thing: a `PluginDescriptor` holding one or more `CapabilityDescriptor`s. The most explicit way to build one by hand is `PluginDescriptor.builder()`, which has `tool(...)`, `skillConfig(...)`, and `subAgentConfig(...)` — each wraps the raw config into a `CapabilityDescriptor` automatically, id'd as `pluginId + "." + name`. One call bundles a whole mixed-type plugin instead of hand-building each `CapabilityDescriptor` separately. See [`ExampleReadme05PluginPackagingTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme05PluginPackagingTest.java).
+
+```java
+PluginDescriptor tripPlugin = PluginDescriptor.builder()
+    .pluginId("trip-plugin")
+    .version("1.0")
+    .name("Trip Plugin")
+    .description("Bundles a tool, a skill, and a sub-agent for trip planning")
+    .tool(weatherTool)                                    // -> trip-plugin.get_weather
+    .skillConfig(travelAdvisor)                           // -> trip-plugin.travel_advisor
+    .subAgentConfig(expenseEstimator)                      // -> trip-plugin.expense_estimator
+    .build();
+
+regnexeAgentBuilder.withPlugin(tripPlugin) ...
+```
+
+> A Skill's `allowedTools` must reference the tool's *full* capability id. If the tool and the skill share a `pluginId` here, that id is `"trip-plugin.get_weather"`, not bare `"get_weather"`.
+
+---
+
+## 4. `@Plugin` and its annotation siblings
+
+For Java classes, annotations build the same `PluginDescriptor` without manual `.tool()`/`.skillConfig()` calls. The two getting-started tools become `@AgentTool` methods on one `@Plugin` class. `@AgentSkill` and `@AgentSubAgent` — the same Skill and Sub-Agent from section 2, as annotations instead of `SkillConfig`/`SubAgentConfig` builders — nest as `public static` inner classes of that same `@Plugin` class, bundling everything under one `pluginId`: one `withPlugin(new WeatherPlugin())` call registers two tools, a skill, and a sub-agent at once. `@AgentSkill` is a pure marker (a Skill never owns tools, so no methods needed); `@AgentSubAgent` reuses `@AgentTool` for its private `ownTools`, exactly like the outer `@Plugin` does for MCP_TOOL. See [`ExampleReadme04PluginAnnotationTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme04PluginAnnotationTest.java).
+
+```java
+@Plugin(id = "weather", name = "Weather Plugin",
+        description = "Weather, air quality, travel advice, and trip cost estimation")
 public class WeatherPlugin {
 
-    @AgentTool("Get today's weather for a city, including temperature and activity advice.")
+    @AgentTool("Get today's weather for a city.")
     public String getWeather(String city) {
-        return "Beijing: sunny, 22°C, excellent air quality. Good for outdoor running.";
+        return "Beijing: sunny, 22 C.";
+    }
+
+    @AgentTool("Get today's air quality index (AQI) for a city.")
+    public String getAirQuality(String city) {
+        return "Beijing: AQI 35, excellent air quality.";
+    }
+
+    @AgentSkill(
+        id = "travel_advisor",
+        description = "Gives outdoor-activity advice based on the current weather for a city. " +
+                       "TRIGGER: Use when the user asks whether the weather is suitable for an outdoor activity.",
+        systemPrompt = """
+                You are an outdoor-activity advisor.
+                1. Call get_weather for the city the user mentions.
+                2. Based on the result, give a short, direct go/no-go recommendation.
+                """,
+        allowedTools = {"weather.get_weather"}   // full capability id within this plugin
+    )
+    public static class TravelAdvisorSkill {
+        // No @AgentTool methods — a Skill can't own private tools.
+    }
+
+    @AgentSubAgent(
+        id = "expense_estimator",
+        description = "Estimates the total cost of a business trip. " +
+                       "TRIGGER: Use when the user asks for a trip budget or cost estimate.",
+        model = "aliyun:qwen-plus",
+        systemPrompt = """
+                You are a travel expense estimator.
+                1. Call estimate_trip_cost with the trip length and destination.
+                2. Report the total and a one-line breakdown.
+                """
+    )
+    public static class ExpenseEstimatorSubAgent {
+
+        @AgentTool("Estimates total cost for a multi-day business trip.")
+        public String estimateTripCost(int days, String city) {
+            return "3-day Chengdu trip estimate: 3600 CNY total.";
+        }
     }
 }
 ```
 
-### 4. Build and execute
-
 ```java
-@Autowired
-RegnexeAgentBuilder regnexeAgentBuilder;
-
 AgentResult result = regnexeAgentBuilder
     .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
     .withPlugin(new WeatherPlugin())
-    .withEventListener(new ConsoleEventListener())
     .build()
-    .execute("Check today's Beijing weather. Is it good for running?");
-
-System.out.println(result.getStatus());
-System.out.println(result.getFinalText());
+    .execute("Check today's weather and air quality in Beijing, then tell me if it's good for outdoor running.");
 ```
 
-No `@EnableXxx` and no XML are required. `RegnexeAgentBuilder`, `TaskStore`, and `ResultComposer` are auto-configured by Spring Boot.
-
-## Core Concepts
-
-| Component | Role |
-|-----------|------|
-| `RegnexeAgent` | Runs the Search -> Plan -> Execute -> Reflect loop |
-| `Marketplace` | Stores installed plugins and their capabilities |
-| `CapabilityDescriptor` | Common descriptor used by search, planning, and execution |
-| `ModelProvider` | Creates LLM instances from `ModelSpec` |
-| `AgentEventListener` | Streams execution, LLM, tool, and token events |
-
-### Capability types
-
-| Type | What it is | Use it for |
-|------|------------|------------|
-| `MCP_TOOL` | One callable function or script | Lookups, calculations, API calls, business actions |
-| `SKILL` | Nested agent with a system prompt and optional private tools | Domain tasks such as contract review or report generation |
-| `SUB_AGENT` | Autonomous nested agent with its own reasoning loop | Complex subtasks that can plan and call tools independently |
-
-Skill and Sub-Agent descriptors store `SkillConfig` or `SubAgentConfig` and are instantiated lazily during execution, so plugin discovery does not require an LLM.
-
-## Plugin Loading
-
-All capabilities are loaded through the marketplace. Use the builder shortcuts for common cases, or install descriptors yourself when plugins come from dynamic sources.
-
-### Bean registration
-
-```java
-RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withPlugin(new WeatherPlugin(), mySpringBean)
-    .build();
-```
-
-Equivalent explicit form:
-
-```java
-SimpleMarketplace marketplace = new SimpleMarketplace();
-marketplace.load(new DefaultPluginManager().register(new WeatherPlugin()));
-
-RegnexeAgent agent = regnexeAgentBuilder
-    .withPluginMarket(marketplace)
-    .build();
-```
+`@AgentSkill`/`@AgentSubAgent` also work standalone (not nested) — `withPlugin(new TravelAdvisorSkill())` on its own registers it as its own single-capability plugin, the same way the code-first `withSkill(SkillConfig)`/`withSubAgent(SubAgentConfig)` from section 2 do.
 
 ### Package scan
 
+Auto-discover `@Plugin`/`@AgentSkill`/`@AgentSubAgent` classes on the classpath instead of constructing them by hand (best for large plugin libraries):
+
 ```java
-RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withScanPackages("com.example.plugins")
-    .build();
+regnexeAgentBuilder.withScanPackages("com.example.plugins") ...
 ```
 
-Scanned plugin classes must be instantiable, for example by exposing a public no-argument constructor.
+---
 
-### File-system directory
+## 5. File-system directory loading
 
-Use directory plugins for ops-managed, hot-pluggable tools, Skills, and Sub-Agents.
+Best for ops-managed, hot-pluggable plugins — no annotations or code at all, just files on disk:
 
 ```
 /opt/regnexe-plugins/
   weather-plugin/
-    plugin.yaml
+    plugin.yaml              ← metadata
     tools/
-      get_weather.sh
-      get_weather.yaml
+      get_weather.sh         ← .sh / .py / .groovy script
+      get_weather.yaml       ← sidecar: description + params
     skills/
-      advisor/
-        SKILL.md
+      advisor/SKILL.md       ← skill with system prompt
     subagents/
-      planner/
-        AGENT.md
+      planner/AGENT.md       ← autonomous sub-agent
 ```
 
 ```java
-RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withDirectory("/opt/regnexe-plugins")
-    .build();
+regnexeAgentBuilder.withDirectory("/opt/regnexe-plugins") ...
 ```
 
+Add or remove plugin folders — no code changes required.
+
 <details>
-<summary>Directory format</summary>
+<summary>Directory file format reference</summary>
 
 **`plugin.yaml`**
-
 ```yaml
 pluginId: weather-plugin
 name: Weather Plugin
@@ -210,8 +311,7 @@ description: Directory-loaded weather plugin
 tags: [weather]
 ```
 
-**`tools/get_weather.yaml`**
-
+**`tools/get_weather.yaml`** (same base name as the script)
 ```yaml
 description: "Get today's weather for a city"
 params: "city: String -- city name"
@@ -219,159 +319,151 @@ tags: [weather]
 ```
 
 **`skills/advisor/SKILL.md`**
-
 ```markdown
 ---
 name: advisor
-description: "Outdoor activity advisor. TRIGGER: when the user asks about outdoor plans."
+description: "Outdoor activity advisor. TRIGGER: when user asks about outdoor plans."
 ---
 You are a weather advisor. Given weather data, recommend practical outdoor activities.
 ```
 
 **`subagents/planner/AGENT.md`**
-
 ```markdown
 ---
 name: planner
-description: "Outdoor activity planner. TRIGGER: when planning a full itinerary."
+description: "Outdoor activity planner sub-agent. TRIGGER: when planning a full itinerary."
 ---
 You are an outdoor activity planner. Use weather and user needs to produce a detailed plan.
 ```
 
 </details>
 
-### Programmatic descriptors
+---
 
-Use this path when capabilities come from a database, remote config, or runtime generation.
+## 6. Marketplace
+
+Every loading channel above ends the same way: capabilities land in a `Marketplace`. The default `SimpleMarketplace` is an in-memory index — install, search, resolve. See [`ExampleReadme06MarketplaceTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme06MarketplaceTest.java).
 
 ```java
-Tool weatherTool = Tool.builder()
-    .name("get_weather")
-    .description("Get today's weather for a city.")
-    .params("city: String -- city name")
-    .func(city -> callWeatherApi(city.toString()))
-    .build();
-
-CapabilityDescriptor cap = CapabilityDescriptor.builder()
-    .capabilityId("db-weather.get_weather")
-    .pluginId("db-weather")
-    .type(CapabilityType.MCP_TOOL)
-    .name("get_weather")
-    .description("Get today's weather for a city.")
-    .tags(List.of("weather"))
-    .tool(weatherTool)
-    .build();
-
-PluginDescriptor plugin = PluginDescriptor.builder()
-    .pluginId("db-weather")
-    .name("DB Weather Plugin")
-    .version("1.0")
-    .capabilities(List.of(cap))
-    .build();
-
 SimpleMarketplace marketplace = new SimpleMarketplace();
-marketplace.install(plugin);
+marketplace.install(PluginDescriptor.builder()
+    .pluginId("weather-plugin").version("1.0")
+    .name("Weather Plugin").description("Weather queries")
+    .tool(weatherTool)
+    .build());
 
-RegnexeAgent agent = regnexeAgentBuilder
-    .withPluginMarket(marketplace)
-    .build();
+CapabilitySearchResult result = marketplace.search(searchQuery);   // candidates for the Planner
+CapabilityDescriptor cap = marketplace.resolveDescriptor("weather-plugin.get_weather");
 ```
 
-## Sub-Agent Model Control
-
-In 0.1.1, a Sub-Agent can either inherit the parent agent's LLM or request its own model. Capability-level `modelKwargs` are forwarded to the LLM builder for vendor-specific options such as `temperature` or `thinking`.
+`Marketplace` is just an interface — implement your own (DB-backed, ES-backed, tenant-aware, semantic search...) and pass it to `withPluginMarket(...)`. No other agent code changes:
 
 ```java
-Tool attractionsTool = Tool.builder()
-    .name("get_attractions")
-    .description("Get attractions by theme.")
-    .params("theme: String -- culture/nature/business")
-    .func(theme -> lookupAttractions(theme.toString()))
-    .build();
+class DbBackedMarketplace implements Marketplace {
+    // install()/uninstall()/enable()/disable()/search()/resolveDescriptor()/listEnabled()
+    // backed by a JPA repository or JDBC template instead of a Map.
+    // Add whatever extra query methods your ops/admin tooling needs (e.g. findByTag).
+}
 
-SubAgentConfig plannerConfig = SubAgentConfig.builder()
-    .name("travel_planner")
-    .description("Business trip planner. TRIGGER: use when planning travel itineraries.")
-    .systemPrompt("Plan a practical business trip itinerary. Call get_attractions before finalizing.")
-    .model("aliyun:qwen-max")
-    .inheritModel(false)
-    .build();
-
-CapabilityDescriptor planner = CapabilityDescriptor.builder()
-    .capabilityId("travel.travel_planner")
-    .pluginId("travel")
-    .type(CapabilityType.SUB_AGENT)
-    .name("travel_planner")
-    .description("Plans business trip itineraries with attraction lookup.")
-    .subAgentConfig(plannerConfig)
-    .ownTools(List.of(attractionsTool))
-    .modelKwargs(Map.of("temperature", 0.3))
-    .build();
+regnexeAgentBuilder.withPluginMarket(new DbBackedMarketplace()) ...
 ```
 
-`ownTools` are private to that Skill or Sub-Agent. They are injected into the nested executor but are not exposed as marketplace capabilities for the master agent to call directly.
+---
 
-## Events and Token Tracking
+## 7. Three layers of context memory
 
-Register an `AgentEventListener` to stream runtime events to logs, SSE, tracing systems, or metrics pipelines.
+Three independent, independently-replaceable layers, each solving a different problem. See [`ExampleReadme07ThreeLayerMemoryTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme07ThreeLayerMemoryTest.java).
+
+| Layer | Question it answers | Config knob | Default |
+|---|---|---|---|
+| Session memory | "What did this user say in earlier tasks?" | `withSessionStorage(ConversationStorage)` | `InMemoryConversationStorage` |
+| Task ledger | "What happened, round by round, in this `execute()`/`resume()`?" | `withTaskStore(TaskStore)` | `InMemoryTaskStore` |
+| Agent context | "How much history does one tool-calling loop carry?" | `withAgentContext(AgentContext)` | `FullContext` (no compression) |
+
+**Session memory** — cross-task history keyed by `sessionId`:
 
 ```java
 RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withPlugin(new WeatherPlugin())
-    .withEventListener(event -> {
-        if (event.getType() == EventType.TASK_TOKEN_SUMMARY) {
-            metrics.record(event.getText());
-        }
-    })
-    .build();
-```
-
-The builder automatically wraps your listener with `TokenAggregatingEventListener`. It collects outer-loop `TOKEN_USAGE` and nested `CAPABILITY_TOKEN_USAGE`, then emits one `TASK_TOKEN_SUMMARY` before `AGENT_COMPLETED`.
-
-Important event types:
-
-| Event | Meaning |
-|-------|---------|
-| `PLAN_LLM_RESPONDED` | Planner LLM output |
-| `REFLECT_LLM_RESPONDED` | Reflector LLM output |
-| `SKILL_LLM_RESPONDED` | Skill inner LLM output |
-| `AGENT_LLM_RESPONDED` | Sub-Agent inner LLM output |
-| `TOKEN_USAGE` | Parent agent LLM token event |
-| `CAPABILITY_TOKEN_USAGE` | Skill/Sub-Agent token event, attributed to capability name |
-| `TASK_TOKEN_SUMMARY` | Aggregated total, per-model usage, elapsed time, and LLM time |
-
-## Pause and Resume
-
-```java
-Future<AgentResult> future = executor.submit(() -> agent.execute(request));
-
-agent.pause();
-AgentResult paused = future.get();   // status == PAUSED
-
-AgentResult done = agent.resume(
-    paused.getState().getSessionId(),
-    "Also factor in today's air quality index."
-);
-```
-
-Use `withTaskStore(taskStore)` when paused state must survive outside the default in-memory store.
-
-## Session Memory
-
-```java
-RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withPlugin(new WeatherPlugin())
+    .withTool(weatherTool)
     .withSessionStorage(new InMemoryConversationStorage())
-    .withSessionBufferSize(10)
     .build();
 
 agent.execute(request("session-123", "Check today's weather in Beijing."));
-agent.execute(request("session-123", "Based on that, what should I wear today?"));
+agent.execute(request("session-123", "Based on that, what should I wear today?"));  // recalls prior context
 ```
 
-You can also provide a custom `ConversationMemory` with `withSessionMemory(memory)`. The supplied memory instance should be scoped to one session and should not be shared across concurrent executions.
+**Task ledger** — every round's Search/Plan/Execute/Reflect result, persisted for audit or resume:
+
+```java
+InMemoryTaskStore taskStore = new InMemoryTaskStore();
+RegnexeAgent agent = regnexeAgentBuilder.withTool(weatherTool).withTaskStore(taskStore).build();
+
+AgentResult result = agent.execute("Check today's weather in Beijing. Is it good for running?");
+TaskExecutionState ledger = taskStore.load(result.getTaskId()).orElseThrow();
+ledger.getRounds().forEach(r -> System.out.println(r.getRoundNumber() + ": " + r.getReflection()));
+```
+
+**Agent context** — swap the default unbounded `FullContext` for a bounded strategy when tool-calling traces get long:
+
+```java
+RegnexeAgent agent = regnexeAgentBuilder
+    .withTool(weatherTool)
+    .withAgentContext(SlidingWindowContext.builder().windowSize(5).build())
+    .build();
+```
+
+---
+
+## 8. Observability
+
+Every Search → Plan → Execute → Reflect step — and the inner tool-calling loop inside Execute — emits an `AgentEvent` through whichever `AgentEventListener` you configure via `withEventListener(...)`. `EventType` pairs a `*_STARTED`/`*_COMPLETED` event for each outer step, plus inner-loop hooks (`TOOL_CALLED`/`TOOL_RESULT`/`LLM_RESPONDED`), phase-specific LLM hooks (`PLAN_LLM_RESPONDED`, `REFLECT_LLM_RESPONDED`, `SKILL_LLM_RESPONDED`, `AGENT_LLM_RESPONDED`), and token-usage events (`TOKEN_USAGE`, `CAPABILITY_TOKEN_USAGE`, `TASK_TOKEN_SUMMARY`). See [`ExampleReadme09ObservabilityTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme09ObservabilityTest.java).
+
+`ConsoleEventListener` — the default used throughout this README — prints to stdout, good for local dev and tests:
+
+```java
+RegnexeAgent agent = regnexeAgentBuilder
+    .withTool(weatherTool)
+    .withEventListener(new ConsoleEventListener())
+    .build();
+```
+
+In production, swap in `Slf4jEventListener` instead: same event formatting, but routed through SLF4J so tracing flows into your application's existing logging pipeline rather than a separate println stream:
+
+```java
+regnexeAgentBuilder.withEventListener(new Slf4jEventListener()) ...
+```
+
+Both extend `AbstractEventListener`, which provides two constructor flags to suppress noisy event groups without writing a custom `shouldHandle`:
+
+```java
+new ConsoleEventListener(false, false);   // showTokenEvents=false, showLlmEvents=false
+new Slf4jEventListener(true, true);       // show everything, including token usage and raw LLM text
+```
+
+Write your own listener by extending `AbstractEventListener` (or implementing `AgentEventListener` directly for full control over filtering) — override `onEvent`, and optionally `shouldHandle` to pick exactly which `EventType`s you care about.
+
+---
+
+## 9. Pause & Resume
+
+`pause()` is thread-safe and can be called from any thread while a task is running. The task transitions to `PAUSED` and persists in the configured `TaskStore`; `resume()` picks up the most recent resumable task for that session and continues with extra context. See [`ExampleReadme08PauseResumeTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme08PauseResumeTest.java).
+
+```java
+RegnexeAgent agent = regnexeAgentBuilder
+    .withTool(weatherTool)
+    .withTaskStore(new InMemoryTaskStore())   // required: pause/resume needs persisted state
+    .build();
+
+Future<AgentResult> future = executor.submit(() -> agent.execute(request));
+
+agent.pause();                       // safe to call from any thread
+AgentResult paused = future.get();   // status == PAUSED
+
+AgentResult done = agent.resume(sessionId, "Also factor in today's air quality index.");
+// done.getStatus() == FINISHED
+```
+
+---
 
 ## Reference
 
@@ -379,26 +471,23 @@ You can also provide a custom `ConversationMemory` with `withSessionMemory(memor
 <summary>Builder options</summary>
 
 | Method | Default | Description |
-|--------|---------|-------------|
-| `withDefaultModel(String)` | - | Default model, vendor inferred by model prefix |
-| `withDefaultModel(String, String)` | - | Default vendor and model name |
-| `withDefaultModel(Vendor, String)` | - | Type-safe vendor and model name |
-| `withDefaultModel(BaseChatModel)` | - | Use a direct LLM instance for the parent agent |
-| `withLlmProvider(ModelProvider)` | `DefaultModelProvider` | Custom model factory |
-| `withPlugin(Object...)` | - | Register `@Plugin` beans |
-| `withScanPackages(String...)` | - | Scan packages for `@Plugin` classes |
-| `withDirectory(String...)` | - | Load file-system plugin directories |
-| `withPluginMarket(Marketplace)` | empty `SimpleMarketplace` | Full marketplace control |
-| `withMaxRounds(int)` | `10` | Maximum Search -> Plan -> Execute -> Reflect rounds |
-| `withMaxAgentIterations(int)` | `20` | Maximum inner Skill/Sub-Agent iterations |
-| `withMaxContextOutputChars(int)` | `800` | Maximum retained output characters per context item |
-| `withVerbose(boolean)` | `false` | Enable verbose inner executor output |
-| `withEventListener(AgentEventListener)` | no-op | Runtime event hook |
+|--------|---------|--------------|
+| `withDefaultModel(Vendor, String)` | — | LLM vendor + model name |
+| `withLlmProvider(ModelProvider)` | `DefaultModelProvider` | Custom LLM provider |
+| `withTool(Tool...)` | — | Register pre-built tools as MCP_TOOL capabilities (creates marketplace automatically) |
+| `withSkill(SkillConfig...)` | — | Register SKILL capabilities directly (creates marketplace automatically) |
+| `withSubAgent(SubAgentConfig...)` | — | Register SUB_AGENT capabilities directly (creates marketplace automatically) |
+| `withPlugin(Object...)` | — | Register `@Plugin` beans (creates marketplace automatically) |
+| `withPlugin(PluginDescriptor...)` | — | Install pre-built `PluginDescriptor` objects (creates marketplace automatically) |
+| `withScanPackages(String...)` | — | Scan packages for `@Plugin` classes (creates marketplace automatically) |
+| `withDirectory(String...)` | — | Load plugins from file-system directories (creates marketplace automatically) |
+| `withPluginMarket(Marketplace)` | empty marketplace | Full marketplace control |
+| `withMaxRounds(int)` | `10` | Max reasoning iterations |
+| `withEventListener(AgentEventListener)` | no-op | Hook for LLM output, tool calls, results |
 | `withTaskStore(TaskStore)` | `InMemoryTaskStore` | State persistence for pause/resume |
 | `withResultComposer(ResultComposer)` | `DefaultResultComposer` | Final answer assembly strategy |
-| `withSessionStorage(ConversationStorage)` | `InMemoryConversationStorage` | Conversation storage backend |
-| `withSessionBufferSize(int)` | `10` | Messages before session summary compaction |
-| `withSessionMemory(ConversationMemory)` | auto-created | Custom session memory instance |
+| `withSessionStorage(ConversationStorage)` | `InMemoryConversationStorage` | Cross-turn memory |
+| `withSessionBufferSize(int)` | `10` | Messages before summarization triggers |
 | `withAgentContext(AgentContext)` | `FullContext` | Context window strategy |
 
 </details>
@@ -414,12 +503,14 @@ You can also provide a custom `ConversationMemory` with `withSessionMemory(memor
 | `Vendor.HUNYUAN` | Tencent Hunyuan | `HUNYUAN_KEY` |
 | `Vendor.LINGYI` | 01.AI | `LINGYI_KEY` |
 | `Vendor.MINIMAX` | MiniMax | `MINIMAX_KEY` |
-| `Vendor.MOONSHOT` | Moonshot/Kimi | `MOONSHOT_KEY` |
-| `Vendor.OLLAMA` | Ollama local models | `OLLAMA_KEY1` |
+| `Vendor.MOONSHOT` | Moonshot (Kimi) | `MOONSHOT_KEY` |
+| `Vendor.OLLAMA` | Ollama (local) | `OLLAMA_KEY1` |
 | `Vendor.OPENAI` | OpenAI | `CHATGPT_KEY` |
 | `Vendor.QIANFAN` | Baidu Qianfan | `QIANFAN_KEY` |
 | `Vendor.STEPFUN` | StepFun | `STEPFUN_KEY` |
-| `Vendor.ZHIPU` | Zhipu AI/GLM | `ZHIPU_KEY` |
+| `Vendor.ZHIPU` | Zhipu AI (GLM) | `ZHIPU_KEY` |
+
+All API endpoint URLs are pre-configured. Set the env var or add `chat-key` under the matching `models.*` prefix.
 
 </details>
 
@@ -430,12 +521,15 @@ You can also provide a custom `ConversationMemory` with `withSessionMemory(memor
 |--------|---------|
 | `FINISHED` | Goal completed |
 | `PAUSED` | Interrupted by `pause()`, resumable |
-| `TIMEOUT` | Hit `maxRounds` |
-| `ESCALATED` | Reflector requested human review |
+| `TIMEOUT` | Hit `maxRounds` limit |
+| `ESCALATED` | Reflector flagged for human review |
 | `FAILED` | Unrecoverable error |
 
 </details>
 
 ---
 
-[中文文档](README_zh.md) · [Release notes](docs/release/pr-0.1.1-en.md) · [License](LICENSE)
+If Regnexe saves you time, a ⭐ on GitHub goes a long way.  
+For enterprise integrations or custom requirements, open an issue or reach out directly.
+
+[中文文档](README_zh.md) · [License](LICENSE)

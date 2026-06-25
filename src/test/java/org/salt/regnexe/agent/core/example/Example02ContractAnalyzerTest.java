@@ -12,23 +12,22 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core;
+package org.salt.regnexe.agent.core.example;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.salt.regnexe.agent.core.RegnexeAgent;
+import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
+import org.salt.regnexe.agent.core.TestApplication;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
-import org.salt.regnexe.agent.core.llm.DefaultModelProvider;
-import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.llm.Vendor;
 import org.salt.regnexe.agent.core.market.SimpleMarketplace;
 import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
-import org.salt.jlangchain.core.ChainActor;
-import org.salt.jlangchain.core.skill.Skill;
 import org.salt.jlangchain.core.skill.SkillConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,11 +37,11 @@ import org.springframework.test.context.junit4.SpringRunner;
 import java.util.List;
 
 /**
- * M0 smoke test: contract risk analysis using a Skill capability.
+ * Example 02: contract risk analysis using a Skill capability.
  *
  * Scenario
  * --------
- * Goal  : 分析合同条款的法律风险
+ * Goal  : analyze legal risks in contract clauses
  * Skill : contract_analyzer — driven by a system prompt and a fake analyze_clause tool
  * Expect: agent finishes with FINISHED status and non-empty analysis
  *
@@ -52,13 +51,10 @@ import java.util.List;
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
-public class ContractAnalyzerTest {
+public class Example02ContractAnalyzerTest {
 
     @Autowired
     private RegnexeAgentBuilder regnexeAgentBuilder;
-
-    @Autowired
-    private ChainActor chainActor;
 
     @Test
     public void contractRiskAnalysisShouldFinish() {
@@ -67,21 +63,21 @@ public class ContractAnalyzerTest {
 
         Tool analyzeClauseTool = Tool.builder()
                 .name("analyze_clause")
-                .description("分析合同条款的法律风险等级和说明。输入合同条款原文。")
-                .params("clause: String -- 需要分析的合同条款原文")
+                .description("Analyzes the legal risk level and explanation for a contract clause.")
+                .params("clause: String -- original contract clause to analyze")
                 .func(clause -> {
                     String text = clause != null ? clause.toString() : "";
-                    if (text.contains("单方面") || text.contains("任意")) {
-                        return "风险等级: 高\n" +
-                               "问题: 该条款赋予甲方单方面权利，严重失衡。\n" +
-                               "建议: 增加乙方异议权和赔偿条款，或限制甲方修改范围。";
+                    if (text.contains("unilateral") || text.contains("arbitrary")) {
+                        return "Risk level: High\n" +
+                               "Issue: The clause grants one party unilateral rights and creates a severe imbalance.\n" +
+                               "Recommendation: Add an objection right and compensation terms, or limit the scope of unilateral changes.";
                     }
-                    if (text.contains("违约金") || text.contains("赔偿")) {
-                        return "风险等级: 中\n" +
-                               "问题: 违约金条款需明确计算方式和上限。\n" +
-                               "建议: 补充违约金计算公式，设置合理上限（不超过合同总额的30%）。";
+                    if (text.contains("liquidated damages") || text.contains("compensation")) {
+                        return "Risk level: Medium\n" +
+                               "Issue: The liquidated damages clause should define the calculation method and cap.\n" +
+                               "Recommendation: Add a calculation formula and a reasonable cap, such as no more than 30% of the contract value.";
                     }
-                    return "风险等级: 低\n问题: 未发现明显风险条款。\n建议: 保持当前表述。";
+                    return "Risk level: Low\nIssue: No obvious risky clause was found.\nRecommendation: Keep the current wording.";
                 })
                 .build();
 
@@ -89,41 +85,52 @@ public class ContractAnalyzerTest {
 
         SkillConfig skillConfig = SkillConfig.builder()
                 .name("contract_analyzer")
-                .description("专业合同条款法律风险分析技能。输入合同条款文本，输出风险等级和改进建议。" +
-                             "TRIGGER: 当用户需要分析合同、协议、条款风险时使用。")
+                .description("Professional legal risk analysis for contract clauses. Takes clause text and returns risk levels and improvement advice. " +
+                             "TRIGGER: Use when the user needs contract, agreement, or clause risk analysis.")
                 .systemPrompt("""
-                        你是一个专业的法律合同风险分析助手。
-                        用户会提供合同条款，你需要：
-                        1. 调用 analyze_clause 工具对每个关键条款进行风险分析
-                        2. 汇总所有条款的风险等级（高/中/低）
-                        3. 给出总体风险评估和修改建议
-                        请用中文回答，格式清晰，条理分明。
+                        You are a professional legal contract risk analysis assistant.
+                        The user will provide contract clauses. You need to:
+                        1. Call the analyze_clause tool for each key clause.
+                        2. Return a concise fixed-format summary only.
+                        Output rules:
+                        - Maximum 120 words total.
+                        - Do not use markdown tables.
+                        - Do not add legal theory or background.
+                        - Do not repeat the full clause text.
+                        - For each clause, use exactly one line:
+                          Clause N: Risk=<High/Medium/Low>; Issue=<one short sentence>; Advice=<one short sentence>.
+                        - End with exactly one line:
+                          Overall: <one short sentence>.
                         """)
-                .build();
-
-        Skill contractSkill = Skill.from(skillConfig, chainActor)
-                .llm(new DefaultModelProvider().provide(ModelSpec.of(Vendor.ALIYUN, "deepseek-v4-flash")))
-                .tools(analyzeClauseTool)
+                .allowedTools(List.of("analyze_clause"))
                 .build();
 
         // ── Marketplace ──────────────────────────────────────────────────────
+
+        CapabilityDescriptor analyzeClauseCap = CapabilityDescriptor.builder()
+                .capabilityId("analyze_clause")
+                .pluginId("legal-plugin")
+                .type(CapabilityType.MCP_TOOL)
+                .tags(List.of("legal", "contract", "risk"))
+                .tool(analyzeClauseTool)
+                .build();
 
         CapabilityDescriptor contractCap = CapabilityDescriptor.builder()
                 .capabilityId("contract_analyzer")
                 .pluginId("legal-plugin")
                 .type(CapabilityType.SKILL)
-                .name("contract_analyzer")
-                .description("专业合同条款法律风险分析技能。输入合同条款文本，输出风险等级和改进建议。")
                 .tags(List.of("legal", "contract", "risk"))
-                .tool(contractSkill.asTool())
+                .skillConfig(skillConfig)
                 .build();
+        Assert.assertEquals(contractCap.getSkillConfig().getName(), contractCap.getName());
+        Assert.assertEquals(contractCap.getSkillConfig().getDescription(), contractCap.getDescription());
 
         PluginDescriptor legalPlugin = PluginDescriptor.builder()
                 .pluginId("legal-plugin")
                 .version("1.0")
                 .name("Legal Plugin")
-                .description("法律文件分析插件")
-                .capabilities(List.of(contractCap))
+                .description("Legal document analysis plugin")
+                .capabilities(List.of(analyzeClauseCap, contractCap))
                 .build();
 
         SimpleMarketplace marketplace = new SimpleMarketplace();
@@ -141,9 +148,9 @@ public class ContractAnalyzerTest {
         // ── Execute ──────────────────────────────────────────────────────────
 
         AgentResult result = agent.execute(
-                "请分析以下合同条款的法律风险：" +
-                "第3条：甲方有权单方面修改本合同任意条款，乙方在收到书面通知后5日内需确认，否则视为同意。" +
-                "第7条：乙方违约需支付合同总额50%的违约金，甲方违约无需赔偿。");
+                "Please analyze the legal risks in these contract clauses: " +
+                "Clause 3: Party A may unilaterally modify any arbitrary clause in this contract. Party B must confirm within 5 days after written notice, otherwise consent is deemed given. " +
+                "Clause 7: If Party B breaches the contract, Party B must pay liquidated damages equal to 50% of the contract value. If Party A breaches the contract, Party A owes no compensation.");
 
         System.out.println("\n========== ContractAnalyzer Result ==========");
         System.out.println("Status   : " + result.getStatus());

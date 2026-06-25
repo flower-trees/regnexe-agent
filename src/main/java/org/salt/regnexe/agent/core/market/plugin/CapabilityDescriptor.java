@@ -14,7 +14,6 @@
 
 package org.salt.regnexe.agent.core.market.plugin;
 
-import lombok.Builder;
 import lombok.Data;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.jlangchain.core.skill.SkillConfig;
@@ -38,7 +37,6 @@ import java.util.List;
  * free of LLM dependencies at load time.
  */
 @Data
-@Builder
 public class CapabilityDescriptor {
 
     private String capabilityId;
@@ -63,15 +61,122 @@ public class CapabilityDescriptor {
     private SubAgentConfig subAgentConfig;
 
     /**
-     * Private tools injected directly into the Skill/SubAgent's own tool registry.
-     * These are never exposed to the master LLM and do not appear in the marketplace.
-     * Use this for internal tools that should only be callable by this specific capability.
-     */
-    private List<Tool> ownTools;
-
-    /**
-     * Extra kwargs passed to the LLM builder when this capability's model is resolved
-     * (e.g. temperature, thinking). Null = provider defaults.
+     * Extra kwargs passed to the SubAgent LLM builder when this capability's model is
+     * resolved (e.g. temperature, thinking). Null = provider defaults.
+     * Skills always inherit the master LLM and must not define model kwargs.
      */
     private java.util.Map<String, Object> modelKwargs;
+
+    public static CapabilityDescriptorBuilder builder() {
+        return new CapabilityDescriptorBuilder();
+    }
+
+    public static class CapabilityDescriptorBuilder {
+
+        private String capabilityId;
+        private String pluginId;
+        private CapabilityType type;
+        private String name;
+        private String description;
+        private List<String> tags;
+        private Tool tool;
+        private SkillConfig skillConfig;
+        private SubAgentConfig subAgentConfig;
+        private java.util.Map<String, Object> modelKwargs;
+
+        public CapabilityDescriptorBuilder capabilityId(String capabilityId) {
+            this.capabilityId = capabilityId;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder pluginId(String pluginId) {
+            this.pluginId = pluginId;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder type(CapabilityType type) {
+            this.type = type;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder name(String name) {
+            this.name = name;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder description(String description) {
+            this.description = description;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder tags(List<String> tags) {
+            this.tags = tags;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder tool(Tool tool) {
+            this.tool = tool;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder skillConfig(SkillConfig skillConfig) {
+            this.skillConfig = skillConfig;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder subAgentConfig(SubAgentConfig subAgentConfig) {
+            this.subAgentConfig = subAgentConfig;
+            return this;
+        }
+
+        public CapabilityDescriptorBuilder modelKwargs(java.util.Map<String, Object> modelKwargs) {
+            this.modelKwargs = modelKwargs;
+            return this;
+        }
+
+        public CapabilityDescriptor build() {
+            validate();
+
+            if (type == CapabilityType.MCP_TOOL && tool != null) {
+                fillNameAndDescription(tool.getName(), tool.getDescription());
+            } else if (type == CapabilityType.SKILL && skillConfig != null) {
+                fillNameAndDescription(skillConfig.getName(), skillConfig.getDescription());
+            } else if (type == CapabilityType.SUB_AGENT && subAgentConfig != null) {
+                fillNameAndDescription(subAgentConfig.getName(), subAgentConfig.getDescription());
+            }
+
+            CapabilityDescriptor descriptor = new CapabilityDescriptor();
+            descriptor.setCapabilityId(capabilityId);
+            descriptor.setPluginId(pluginId);
+            descriptor.setType(type);
+            descriptor.setName(name);
+            descriptor.setDescription(description);
+            descriptor.setTags(tags);
+            descriptor.setTool(tool);
+            descriptor.setSkillConfig(skillConfig);
+            descriptor.setSubAgentConfig(subAgentConfig);
+            descriptor.setModelKwargs(modelKwargs);
+            return descriptor;
+        }
+
+        private void validate() {
+            if (type == CapabilityType.SKILL && (tool != null || modelKwargs != null)) {
+                throw new IllegalArgumentException(
+                        "SKILL capabilities must inherit tools and LLM; do not set tool or modelKwargs.");
+            }
+        }
+
+        private static boolean isBlank(String value) {
+            return value == null || value.isBlank();
+        }
+
+        private void fillNameAndDescription(String defaultName, String defaultDescription) {
+            if (isBlank(name)) {
+                name = defaultName;
+            }
+            if (isBlank(description)) {
+                description = defaultDescription;
+            }
+        }
+    }
 }

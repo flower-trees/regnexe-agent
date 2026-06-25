@@ -61,6 +61,11 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
 
             Rules:
             - hintForNext must be null when action is FINISH or ESCALATE.
+            - CROSS-CHECK: If the Goal specifies concrete constraints (specific items to upgrade, specific \
+              settings or scenes, named entities), verify the execution result honors those constraints. \
+              If the result deviates — e.g. the setting changes, named entities disappear, or required \
+              items are replaced wholesale — action should be CONTINUE, not FINISH. Describe the deviation \
+              in planAdjustment.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
@@ -85,6 +90,10 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
     public Object process(Object input) {
         IContextBus bus = getContextBus();
         TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
+        if (state.getStatus() != TaskStatus.RUNNING) {
+            log.debug("Reflector skipped because task status is {}", state.getStatus());
+            return null;
+        }
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
@@ -92,12 +101,18 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 
         String execText = bus.getTransmit(ContextBusKeys.EXEC_TEXT);
+        if ((execText == null || execText.isBlank()) && state.getLastToolResult() != null) {
+            execText = state.getLastToolResult();
+        }
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
         String taskId = state.getTaskId();
         int roundNum = state.getCurrentRound();
         FlowInstance flow = buildFlow(chainActor, llm,
-                text -> listener.onEvent(AgentEvent.of(taskId, roundNum, EventType.REFLECT_LLM_RESPONDED, text)));
+                text -> listener.dispatch(AgentEvent.of(taskId, roundNum, EventType.REFLECT_LLM_RESPONDED, text)));
+
+        listener.dispatch(AgentEvent.of(taskId, roundNum, EventType.REFLECTION_STARTED,
+                execText != null ? execText : "(no execution output)"));
 
         String userPrompt = buildPrompt(state, execText);
         ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
@@ -115,7 +130,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         }
         state.setUpdatedAt(System.currentTimeMillis());
 
-        listener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+        listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.REFLECTION_COMPLETED,
                 decision.getAction() + " — " + decision.getReason()));
         log.debug("Round {}: reflection = {}, reason = {}",

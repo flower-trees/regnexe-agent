@@ -17,6 +17,8 @@ package org.salt.regnexe.agent.core.task.state.execution;
 import lombok.Data;
 import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 
+import java.util.List;
+
 /**
  * Executor output for one round
  */
@@ -32,6 +34,8 @@ public class ExecutionOutput {
      * Serialized AgentTaskContext for checkpoint/resume
      */
     private String partialContext;
+
+    private List<ToolExecutionRecord> toolExecutions;
 
     private ExecutionStatus status;
 }

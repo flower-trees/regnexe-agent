@@ -50,4 +50,12 @@ public class TaskRequest {
      * distinguish it from the original goal.
      */
     private String supplementInput;
+
+    /**
+     * Short human-readable description of the user's intent (e.g. "升级选题：女孩嫉妒").
+     * Used as the human turn in session history storage instead of the raw goal, so that
+     * the summary LLM sees meaningful intent rather than internal agent instructions.
+     * Falls back to goal when null/blank.
+     */
+    private String displayGoal;
 }

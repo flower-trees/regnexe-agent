@@ -1,19 +1,19 @@
 <p align="center">
   <h1 align="center">⚡ Regnexe</h1>
   <p align="center"><b>面向 Java / Spring Boot 的多轮 Agent 编排框架</b></p>
-  <p align="center">围绕 Search、Plan、Execute、Reflect，将 Tool、Skill 和 Sub-Agent 组合成企业级工作流。</p>
+  <p align="center">用统一插件市场管理 Tool、Skill 和 Sub-Agent，让 Agent 能搜索、规划、执行并反思。</p>
 </p>
 
 <p align="center">
   <a href="https://central.sonatype.com/artifact/io.github.flower-trees/regnexe-agent"><img src="https://img.shields.io/maven-central/v/io.github.flower-trees/regnexe-agent?label=Maven%20Central" alt="Maven Central"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
   <img src="https://img.shields.io/badge/Java-17%2B-orange" alt="Java 17+"/>
-  <img src="https://img.shields.io/badge/Spring%20Boot-3.2%2B-green" alt="Spring Boot 3.2+"/>
+  <img src="https://img.shields.io/badge/Spring%20Boot-3.x-green" alt="Spring Boot 3.x"/>
 </p>
 
 ---
 
-Regnexe 不是一次 LLM 工具调用的简单封装。它围绕目标运行完整的 **Search -> Plan -> Execute -> Reflect** 循环：先搜索相关能力，再规划下一步，执行工具或嵌套 Agent，最后判断是否完成、重试、继续、暂停或交给人工处理。
+Regnexe 不是一次 LLM 工具调用的简单封装。它围绕一个目标运行完整的 **Search -> Plan -> Execute -> Reflect** 循环：先从插件市场中搜索可用能力，再规划执行步骤，调用工具或子 Agent，最后根据结果判断是否完成、重试、继续规划或交给人工处理。
 
 ```
 用户目标
@@ -24,55 +24,55 @@ Regnexe 不是一次 LLM 工具调用的简单封装。它围绕目标运行完�
   v
 AgentResult
 
-Marketplace
-  |
-  +-- @Plugin Bean
-  +-- 包扫描
-  +-- 文件系统插件目录
-  +-- 来自 DB / API / 运行时配置的动态描述
+能力来源统一进入 Marketplace：
+
+代码直注册(tool/skill/subagent) / @Plugin Bean / 包扫描 / 文件系统目录
   |
   v
 CapabilityDescriptor
   |
-  +-- MCP_TOOL   单个可调用函数或脚本
-  +-- SKILL      带独立 Prompt 和私有工具的嵌套 Agent
-  +-- SUB_AGENT  带独立推理循环的自主子 Agent
+  +-- MCP Tool
+  +-- Skill
+  +-- Sub-Agent
 ```
 
 ## 为什么用 Regnexe
 
 - **多轮推理**：Agent 会基于中间结果继续规划，而不是只调用一次工具。
 - **统一能力市场**：Java Bean、扫描类、脚本目录、数据库动态定义都可以转成 `CapabilityDescriptor`。
-- **嵌套 Agent 私有工具**：通过 `ownTools` 给 Skill 或 Sub-Agent 注入专属工具，不暴露给主 Agent。
-- **能力级模型控制**：Sub-Agent 可继承主 Agent 模型，也可指定自己的模型和厂商参数。
-- **内置观测能力**：支持外层阶段事件、LLM 响应、工具调用、能力级 token、任务级 token 汇总。
-- **企业级扩展点**：暂停恢复、任务持久化、会话记忆、自定义结果组装、自定义模型提供者和 Spring Boot 自动配置。
+- **插件化扩展**：业务能力可以独立增删，不需要改 Agent 主流程。
+- **暂停与恢复**：运行中的任务可被 `pause()` 中断，并通过 `resume()` 带着新上下文继续。
+- **三层记忆**：会话历史、任务执行账本、单次工具调用上下文三层独立可替换。
+- **Spring Boot 友好**：`RegnexeAgentBuilder` 自动装配，无需 `@EnableXxx` 或 XML 配置。
+
+本文档从"一次工具调用"开始，一层一层往深处讲。每个代码块都对应一个可直接运行的测试，在 [`src/test/java/.../example/readme/ExampleReadme*Test.java`](src/test/java/org/salt/regnexe/agent/core/example/readme) 下。
 
 ## 目录
 
-- [快速开始](#快速开始)
-- [核心概念](#核心概念)
-- [插件加载方式](#插件加载方式)
-- [Sub-Agent 模型控制](#sub-agent-模型控制)
-- [事件与 Token 统计](#事件与-token-统计)
-- [企业级扩展点](#企业级扩展点)
-- [暂停与恢复](#暂停与恢复)
-- [会话记忆](#会话记忆)
+- [1. 快速开始：多个 tool，一个循环](#1-快速开始多个-tool一个循环)
+- [2. 进阶：Skill 与 Sub-Agent](#2-进阶skill-与-sub-agent)
+- [3. 插件概念与打包](#3-插件概念与打包)
+- [4. @Plugin 及其他注解方式](#4-plugin-及其他注解方式)
+- [5. 文件系统目录加载](#5-文件系统目录加载)
+- [6. Marketplace](#6-marketplace)
+- [7. 三层上下文记忆](#7-三层上下文记忆)
+- [8. 可观测性](#8-可观测性)
+- [9. 暂停与恢复](#9-暂停与恢复)
 - [参考文档](#参考文档)
 
-## 快速开始
+## 1. 快速开始：多个 tool，一个循环
 
-### 1. 添加依赖
+### 添加依赖
 
 ```xml
 <dependency>
     <groupId>io.github.flower-trees</groupId>
     <artifactId>regnexe-agent</artifactId>
-    <version>0.1.1</version>
+    <version>0.1.2</version>
 </dependency>
 ```
 
-### 2. 配置模型 Key
+### 配置模型 Key
 
 ```yaml
 # application.yml
@@ -85,98 +85,207 @@ models:
 
 接口地址已内置。你可以显式指定厂商，也可以只传模型名，让 `DefaultModelProvider` 按模型名前缀自动路由。
 
-### 3. 定义一个插件
+### 注册 tool 并运行
+
+`withTool(...)` 直接注册已经构建好的 `Tool` 对象——不需要类，不需要注解，是接入 Agent 最快的路径。代码见 [`ExampleReadme01MultiToolTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme01MultiToolTest.java)。
 
 ```java
-@Plugin(id = "weather", name = "天气插件", description = "天气查询")
+Tool weatherTool = Tool.builder()
+    .name("get_weather")
+    .description("获取指定城市今天的天气。")
+    .params("city: String -- 城市名称")
+    .func(city -> "北京：晴，22°C。")
+    .build();
+
+Tool airQualityTool = Tool.builder()
+    .name("get_air_quality")
+    .description("获取指定城市今天的空气质量指数（AQI）。")
+    .params("city: String -- 城市名称")
+    .func(city -> "北京：AQI 35，空气质量优。")
+    .build();
+
+AgentResult result = regnexeAgentBuilder
+    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withTool(weatherTool, airQualityTool)        // ← 可变参数，按需注册多个
+    .withEventListener(new ConsoleEventListener())
+    .build()
+    .execute("查询北京今天的天气和空气质量，告诉我是否适合户外跑步");
+
+System.out.println(result.getFinalText());          // FINISHED
+```
+
+不需要 `@EnableXxx`，不需要 XML。`RegnexeAgentBuilder` 由 Spring Boot 自动装配。
+
+`ConsoleEventListener` 会把循环每一步都打印出来——Search 找到候选能力，Plan 挑选并排好顺序，Execute 调用工具，Reflect 判断是否结束：
+
+```
+[Agent Start   ] R0 Goal: 查询北京今天的天气和空气质量... | maxRounds: 3
+[Search Result ] R1 Found 2 capabilities: get_weather, get_air_quality
+[Plan Result   ] R1 Selected: [get_weather, get_air_quality] | Strategy: SYNTHESIZE | ...
+[TOOL Call     ] R1 get_weather {"city": "Beijing"}
+[TOOL Result   ] R1 get_weather -> 北京：晴，22°C。
+[TOOL Call     ] R1 get_air_quality {"city": "Beijing"}
+[TOOL Result   ] R1 get_air_quality -> 北京：AQI 35，空气质量优。
+[Execute Result] R1 SUCCESS | 晴天 22°C，AQI 35，非常适合户外跑步。
+[Reflect Result] R1 FINISH — 两项数据都已获取，目标已完整回答。
+[Agent Done    ] R1 Status: FINISHED | Rounds: 1
+```
+
+## 2. 进阶：Skill 与 Sub-Agent
+
+单次工具调用能做的事有限。两种更丰富的能力类型可以组合出多步行为，它们的设计取舍刻意相反。
+
+### Skill —— 继承父 Agent 的模型，共享工具
+
+`SkillConfig` 根本没有 model 字段：Skill **永远继承父 Agent 的模型**，它的 `allowedTools` 是已经在市场中注册的能力 id——只能借用，不能拥有。适合那种需要和主 Agent 共用模型、保持轻量、可重复调用的子工作流。代码见 [`ExampleReadme02SkillTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme02SkillTest.java)。
+
+```java
+SkillConfig travelAdvisor = SkillConfig.builder()
+    .name("travel_advisor")
+    .description("调用 get_weather 查询用户提到的城市，根据城市当前天气给出户外活动建议。" +
+                 "TRIGGER: 用户询问天气是否适合户外活动时使用。")
+    .systemPrompt("""
+            你是一个户外活动顾问。
+            1. 调用 get_weather 查询用户提到的城市。
+            2. 根据结果给出简短、直接的"去/不去"建议。
+            """)
+    .allowedTools(List.of("get_weather"))   // 按 id 借用，不是自己拥有
+    .build();
+
+RegnexeAgent agent = regnexeAgentBuilder
+    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withTool(weatherTool)     // Skill 借用的工具必须已经在市场里
+    .withSkill(travelAdvisor)
+    .build();
+```
+
+### Sub-Agent —— 自带模型和私有工具
+
+`SubAgentConfig.model(...)` 可以指定一个和父 Agent **不同**的模型（或者设为 `"inherit"` 表示继承），`ownTools` 是**私有**的——永远不会注册进市场，外层 Agent 没法直接调用它们。适合那种需要独立推理循环、独立工具，或者想用更便宜/更快模型的独立子任务。代码见 [`ExampleReadme03SubAgentTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme03SubAgentTest.java)。
+
+```java
+SubAgentConfig expenseEstimator = SubAgentConfig.builder()
+    .name("expense_estimator")
+    .description("估算商务出行的总花费。" +
+                 "TRIGGER: 用户询问行程预算或费用估算时使用。")
+    .model("aliyun:qwen-plus")        // 自己的模型，独立于父 Agent 的默认模型
+    .systemPrompt("""
+            你是一个出行费用估算师。
+            1. 调用 estimate_trip_cost，传入行程天数和目的地。
+            2. 汇报总价和一行明细。
+            """)
+    .ownTools(List.of(estimateCostTool))   // 私有——外层 Agent 看不到
+    .build();
+
+RegnexeAgent agent = regnexeAgentBuilder
+    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withSubAgent(expenseEstimator)
+    .build();
+```
+
+### 怎么选
+
+| | Skill | Sub-Agent |
+|---|---|---|
+| 模型 | 永远继承父 Agent | 自己的模型，或 `"inherit"` |
+| 工具 | 按能力 id 借用（`allowedTools`） | 私有（`ownTools`），外部不可见 |
+| 适合场景 | 和主 Agent 紧密耦合、需要省成本的可重复子工作流 | 需要隔离或独立模型的独立子任务 |
+
+## 3. 插件概念与打包
+
+插件是一个有名字、有版本、可打标签的能力包——tool、skill、subagent 都可以装进去，共用同一个 `pluginId`。本文档里的每一种加载方式（代码直打包、`@Plugin` 注解、包扫描、文件系统目录）最终都是在构造同一个东西：一个装着一个或多个 `CapabilityDescriptor` 的 `PluginDescriptor`。最直接的手动构造方式是 `PluginDescriptor.builder()`，它有 `tool(...)`、`skillConfig(...)`、`subAgentConfig(...)` 三个方法——每个都会自动把原始配置包装成 `CapabilityDescriptor`，id 为 `pluginId + "." + name`。一次调用就能打包一个混合类型的插件，不需要再手动一个个构造 `CapabilityDescriptor`。代码见 [`ExampleReadme05PluginPackagingTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme05PluginPackagingTest.java)。
+
+```java
+PluginDescriptor tripPlugin = PluginDescriptor.builder()
+    .pluginId("trip-plugin")
+    .version("1.0")
+    .name("Trip Plugin")
+    .description("打包一个 tool、一个 skill 和一个 subagent 用于行程规划")
+    .tool(weatherTool)                                    // -> trip-plugin.get_weather
+    .skillConfig(travelAdvisor)                           // -> trip-plugin.travel_advisor
+    .subAgentConfig(expenseEstimator)                      // -> trip-plugin.expense_estimator
+    .build();
+
+regnexeAgentBuilder.withPlugin(tripPlugin) ...
+```
+
+> Skill 的 `allowedTools` 必须引用工具的**完整**能力 id。如果 tool 和 skill 共用同一个 `pluginId`，这里的 id 就是 `"trip-plugin.get_weather"`，不是裸的 `"get_weather"`。
+
+## 4. @Plugin 及其他注解方式
+
+对 Java 类而言，注解可以构造出同样的 `PluginDescriptor`，不需要手写 `.tool()`/`.skillConfig()`。入门示例里的两个工具，变成一个 `@Plugin` 类上的两个 `@AgentTool` 方法。`@AgentSkill` 和 `@AgentSubAgent`——第 2 节里同样的 Skill 和 Sub-Agent，只是用注解代替 `SkillConfig`/`SubAgentConfig` 的 builder——可以作为这个 `@Plugin` 类的 `public static` 内部类嵌套进去，全部打包在同一个 `pluginId` 下：一次 `withPlugin(new WeatherPlugin())` 调用就能同时注册两个 tool、一个 skill 和一个 subagent。`@AgentSkill` 是纯标记注解（Skill 永远不拥有工具，不需要任何方法）；`@AgentSubAgent` 复用 `@AgentTool` 来声明私有 `ownTools`，跟外层 `@Plugin` 扫描 MCP_TOOL 的方式完全一样。代码见 [`ExampleReadme04PluginAnnotationTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme04PluginAnnotationTest.java)。
+
+```java
+@Plugin(id = "weather", name = "天气插件", description = "天气、空气质量、出行建议与费用估算")
 public class WeatherPlugin {
 
-    @AgentTool("获取指定城市今天的天气，包括温度和运动建议。")
+    @AgentTool("获取指定城市今天的天气。")
     public String getWeather(String city) {
-        return "北京今日：晴，22°C，空气优良，非常适合户外跑步。";
+        return "北京：晴，22°C。";
+    }
+
+    @AgentTool("获取指定城市今天的空气质量指数（AQI）。")
+    public String getAirQuality(String city) {
+        return "北京：AQI 35，空气质量优。";
+    }
+
+    @AgentSkill(
+        id = "travel_advisor",
+        description = "根据城市当前天气给出户外活动建议。" +
+                      "TRIGGER: 用户询问天气是否适合户外活动时使用。",
+        systemPrompt = """
+                你是一个户外活动顾问。
+                1. 调用 get_weather 查询用户提到的城市。
+                2. 根据结果给出简短、直接的"去/不去"建议。
+                """,
+        allowedTools = {"weather.get_weather"}   // 插件内的完整能力 id
+    )
+    public static class TravelAdvisorSkill {
+        // 不需要 @AgentTool 方法——Skill 不能拥有私有工具。
+    }
+
+    @AgentSubAgent(
+        id = "expense_estimator",
+        description = "估算商务出行的总花费。" +
+                      "TRIGGER: 用户询问行程预算或费用估算时使用。",
+        model = "aliyun:qwen-plus",
+        systemPrompt = """
+                你是一个出行费用估算师。
+                1. 调用 estimate_trip_cost，传入行程天数和目的地。
+                2. 汇报总价和一行明细。
+                """
+    )
+    public static class ExpenseEstimatorSubAgent {
+
+        @AgentTool("估算多日商务出行的总花费。")
+        public String estimateTripCost(int days, String city) {
+            return "3天成都行程预估：共3600元人民币。";
+        }
     }
 }
 ```
 
-### 4. 构建 Agent 并执行
-
 ```java
-@Autowired
-RegnexeAgentBuilder regnexeAgentBuilder;
-
 AgentResult result = regnexeAgentBuilder
     .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
     .withPlugin(new WeatherPlugin())
-    .withEventListener(new ConsoleEventListener())
     .build()
-    .execute("查询北京今天的天气，告诉我是否适合户外跑步");
-
-System.out.println(result.getStatus());
-System.out.println(result.getFinalText());
+    .execute("查询北京今天的天气和空气质量，告诉我是否适合户外跑步");
 ```
 
-无需 `@EnableXxx`，也无需 XML。`RegnexeAgentBuilder`、`TaskStore` 和 `ResultComposer` 会通过 Spring Boot 自动配置。
-
-## 核心概念
-
-| 组件 | 作用 |
-|------|------|
-| `RegnexeAgent` | 执行 Search -> Plan -> Execute -> Reflect 循环 |
-| `Marketplace` | 管理已安装插件和能力描述 |
-| `CapabilityDescriptor` | Search、Plan、Execute 共用的能力描述 |
-| `ModelProvider` | 根据 `ModelSpec` 创建 LLM 实例 |
-| `AgentEventListener` | 输出执行过程、LLM、工具和 token 事件 |
-
-### 三种能力类型
-
-| 类型 | 是什么 | 适合什么场景 |
-|------|--------|--------------|
-| `MCP_TOOL` | 单个可调用函数或脚本 | 查询、计算、API 调用、业务动作 |
-| `SKILL` | 带独立 System Prompt 和可选私有工具的嵌套 Agent | 合同分析、报告生成、垂直领域任务 |
-| `SUB_AGENT` | 有独立推理循环的自主子 Agent | 可拆分、可独立规划的复杂子任务 |
-
-Skill 和 Sub-Agent 的描述符保存 `SkillConfig` 或 `SubAgentConfig`，实际对象会在执行阶段按需构建，因此插件发现阶段不依赖 LLM。
-
-## 插件加载方式
-
-所有能力都通过插件市场加载。常见场景可以使用 Builder 快捷方法；如果插件来自动态来源，也可以自己构造并安装描述符。
-
-### Bean 注册
-
-适合已有 Spring 服务、快速原型或手动传入插件对象。
-
-```java
-RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withPlugin(new WeatherPlugin(), mySpringBean)
-    .build();
-```
-
-等价的显式写法：
-
-```java
-SimpleMarketplace marketplace = new SimpleMarketplace();
-marketplace.load(new DefaultPluginManager().register(new WeatherPlugin()));
-
-RegnexeAgent agent = regnexeAgentBuilder
-    .withPluginMarket(marketplace)
-    .build();
-```
+`@AgentSkill`/`@AgentSubAgent` 也可以单独使用（不嵌套）——单独 `withPlugin(new TravelAdvisorSkill())` 会把它注册成自己独立的单能力插件，效果等同于第 2 节里代码直注册的 `withSkill(SkillConfig)`/`withSubAgent(SubAgentConfig)`。
 
 ### 包扫描
 
-适合插件数量较多、希望按包自动发现 `@Plugin` 类的场景。被扫描的插件类需要可被实例化，例如提供 public 无参构造器。
+自动发现 classpath 上的 `@Plugin`/`@AgentSkill`/`@AgentSubAgent` 类，不需要手动构造，适合插件数量较多的场景：
 
 ```java
-RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withScanPackages("com.example.plugins")
-    .build();
+regnexeAgentBuilder.withScanPackages("com.example.plugins") ...
 ```
 
-### 文件系统目录
+## 5. 文件系统目录加载
 
-适合运维管理、热插拔插件、脚本工具、Skill 和 Sub-Agent 文件化配置。
+适合运维管理、热插拔插件——不需要任何注解或代码，纯靠磁盘上的文件：
 
 ```
 /opt/regnexe-plugins/
@@ -194,11 +303,10 @@ RegnexeAgent agent = regnexeAgentBuilder
 ```
 
 ```java
-RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withDirectory("/opt/regnexe-plugins")
-    .build();
+regnexeAgentBuilder.withDirectory("/opt/regnexe-plugins") ...
 ```
+
+增删目录下的插件，不需要改 Agent 代码。
 
 <details>
 <summary>目录文件格式</summary>
@@ -243,234 +351,122 @@ description: "户外活动规划子 Agent。TRIGGER: 需要规划完整行程时
 
 </details>
 
-### 动态构建
+## 6. Marketplace
 
-适合插件定义来自数据库、远程配置、租户配置或运行时逻辑的场景。
+上面所有加载方式最终都走向同一个地方：能力进入一个 `Marketplace`。默认的 `SimpleMarketplace` 是内存索引——install、search、resolve。代码见 [`ExampleReadme06MarketplaceTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme06MarketplaceTest.java)。
 
 ```java
-Tool weatherTool = Tool.builder()
-    .name("get_weather")
-    .description("获取指定城市今天的天气。")
-    .params("city: String -- 城市名称")
-    .func(city -> callWeatherApi(city.toString()))
-    .build();
-
-CapabilityDescriptor cap = CapabilityDescriptor.builder()
-    .capabilityId("db-weather.get_weather")
-    .pluginId("db-weather")
-    .type(CapabilityType.MCP_TOOL)
-    .name("get_weather")
-    .description("获取指定城市今天的天气。")
-    .tags(List.of("weather"))
-    .tool(weatherTool)
-    .build();
-
-PluginDescriptor plugin = PluginDescriptor.builder()
-    .pluginId("db-weather")
-    .name("DB 天气插件")
-    .version("1.0")
-    .capabilities(List.of(cap))
-    .build();
-
 SimpleMarketplace marketplace = new SimpleMarketplace();
-marketplace.install(plugin);
+marketplace.install(PluginDescriptor.builder()
+    .pluginId("weather-plugin").version("1.0")
+    .name("Weather Plugin").description("天气查询")
+    .tool(weatherTool)
+    .build());
 
-RegnexeAgent agent = regnexeAgentBuilder
-    .withPluginMarket(marketplace)
-    .build();
+CapabilitySearchResult result = marketplace.search(searchQuery);   // 给 Planner 的候选能力
+CapabilityDescriptor cap = marketplace.resolveDescriptor("weather-plugin.get_weather");
 ```
 
-如果需要统一管理多个来源，也可以实现 `PluginManager`，再通过 `marketplace.load(yourManager)` 加载。
-
-## Sub-Agent 模型控制
-
-0.1.1 开始，Sub-Agent 可以继承主 Agent 的 LLM，也可以指定自己的模型。能力级 `modelKwargs` 会透传到 LLM builder，适合传递 `temperature`、`thinking` 等厂商参数。
+`Marketplace` 只是一个接口——可以实现自己的版本（数据库存储、ES 检索、租户隔离、语义召回……），传给 `withPluginMarket(...)` 即可，不需要改任何其他 Agent 代码：
 
 ```java
-Tool attractionsTool = Tool.builder()
-    .name("get_attractions")
-    .description("按主题获取景点。")
-    .params("theme: String -- 文化/自然/商务")
-    .func(theme -> lookupAttractions(theme.toString()))
-    .build();
+class DbBackedMarketplace implements Marketplace {
+    // install()/uninstall()/enable()/disable()/search()/resolveDescriptor()/listEnabled()
+    // 底层换成 JPA Repository 或 JdbcTemplate，而不是一个 Map。
+    // 运维/管理后台需要的额外查询方法（比如按 tag 查）可以自由加。
+}
 
-SubAgentConfig plannerConfig = SubAgentConfig.builder()
-    .name("travel_planner")
-    .description("商务出差行程规划专家。TRIGGER: 需要规划差旅行程时使用。")
-    .systemPrompt("规划实用的商务出差行程。最终输出前必须调用 get_attractions。")
-    .model("aliyun:qwen-max")
-    .inheritModel(false)
-    .build();
-
-CapabilityDescriptor planner = CapabilityDescriptor.builder()
-    .capabilityId("travel.travel_planner")
-    .pluginId("travel")
-    .type(CapabilityType.SUB_AGENT)
-    .name("travel_planner")
-    .description("结合景点查询能力规划商务出差行程。")
-    .subAgentConfig(plannerConfig)
-    .ownTools(List.of(attractionsTool))
-    .modelKwargs(Map.of("temperature", 0.3))
-    .build();
+regnexeAgentBuilder.withPluginMarket(new DbBackedMarketplace()) ...
 ```
 
-`ownTools` 是 Skill 或 Sub-Agent 的私有工具。它们会被注入嵌套执行器，但不会作为市场能力暴露给主 Agent 直接调用。
+## 7. 三层上下文记忆
 
-## 事件与 Token 统计
+三层独立、独立可替换的记忆，各自解决不同的问题。代码见 [`ExampleReadme07ThreeLayerMemoryTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme07ThreeLayerMemoryTest.java)。
 
-通过 `AgentEventListener` 可以把运行时事件输出到日志、SSE、链路追踪或指标系统。
+| 层级 | 解决什么问题 | 配置方法 | 默认实现 |
+|---|---|---|---|
+| Session 记忆 | "这个用户之前的任务里说过什么？" | `withSessionStorage(ConversationStorage)` | `InMemoryConversationStorage` |
+| Task 执行账本 | "这次 `execute()`/`resume()` 每一轮都发生了什么？" | `withTaskStore(TaskStore)` | `InMemoryTaskStore` |
+| Agent 执行上下文 | "单次工具调用循环带多少历史？" | `withAgentContext(AgentContext)` | `FullContext`（不压缩） |
+
+**Session 记忆**——按 `sessionId` 串联的跨任务历史：
 
 ```java
 RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withPlugin(new WeatherPlugin())
-    .withEventListener(event -> {
-        if (event.getType() == EventType.TASK_TOKEN_SUMMARY) {
-            metrics.record(event.getText());
-        }
-    })
+    .withTool(weatherTool)
+    .withSessionStorage(new InMemoryConversationStorage())
+    .build();
+
+agent.execute(request("session-123", "查询北京今天的天气"));
+agent.execute(request("session-123", "根据刚才的天气，建议我今天穿什么？"));  // 复用之前的上下文
+```
+
+**Task 执行账本**——每一轮 Search/Plan/Execute/Reflect 的结果，持久化用于审计或恢复：
+
+```java
+InMemoryTaskStore taskStore = new InMemoryTaskStore();
+RegnexeAgent agent = regnexeAgentBuilder.withTool(weatherTool).withTaskStore(taskStore).build();
+
+AgentResult result = agent.execute("查询北京今天的天气，是否适合跑步？");
+TaskExecutionState ledger = taskStore.load(result.getTaskId()).orElseThrow();
+ledger.getRounds().forEach(r -> System.out.println(r.getRoundNumber() + ": " + r.getReflection()));
+```
+
+**Agent 执行上下文**——工具调用轨迹变长时，把默认不压缩的 `FullContext` 换成有边界的策略：
+
+```java
+RegnexeAgent agent = regnexeAgentBuilder
+    .withTool(weatherTool)
+    .withAgentContext(SlidingWindowContext.builder().windowSize(5).build())
     .build();
 ```
 
-Builder 会自动用 `TokenAggregatingEventListener` 包装你的 listener。它会收集外层 `TOKEN_USAGE` 和嵌套能力的 `CAPABILITY_TOKEN_USAGE`，并在 `AGENT_COMPLETED` 前发出一次 `TASK_TOKEN_SUMMARY`。
+## 8. 可观测性
 
-常用事件类型：
+Search → Plan → Execute → Reflect 的每一步——以及 Execute 内部的工具调用循环——都会通过你用 `withEventListener(...)` 配置的 `AgentEventListener` 发出一个 `AgentEvent`。`EventType` 给每个外层步骤配了一对 `*_STARTED`/`*_COMPLETED` 事件，加上内层循环的 `TOOL_CALLED`/`TOOL_RESULT`/`LLM_RESPONDED`、按阶段区分的 LLM 钩子（`PLAN_LLM_RESPONDED`、`REFLECT_LLM_RESPONDED`、`SKILL_LLM_RESPONDED`、`AGENT_LLM_RESPONDED`），以及 Token 用量事件（`TOKEN_USAGE`、`CAPABILITY_TOKEN_USAGE`、`TASK_TOKEN_SUMMARY`）。代码见 [`ExampleReadme09ObservabilityTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme09ObservabilityTest.java)。
 
-| 事件 | 含义 |
-|------|------|
-| `PLAN_LLM_RESPONDED` | Planner 的 LLM 输出 |
-| `REFLECT_LLM_RESPONDED` | Reflector 的 LLM 输出 |
-| `SKILL_LLM_RESPONDED` | Skill 内部 LLM 输出 |
-| `AGENT_LLM_RESPONDED` | Sub-Agent 内部 LLM 输出 |
-| `TOKEN_USAGE` | 主 Agent LLM token 事件 |
-| `CAPABILITY_TOKEN_USAGE` | Skill/Sub-Agent token 事件，带能力名称归因 |
-| `TASK_TOKEN_SUMMARY` | 任务级汇总，包含总量、按模型拆分、总耗时和 LLM 耗时 |
-
-## 企业级扩展点
-
-Regnexe 默认用内存实现，方便本地开发和快速接入。企业项目通常会扩展两个地方：**能力市场怎么搜索**，以及 **执行过程怎么存储**。
-
-### 能力市场：从内存列表扩展到可搜索能力库
-
-任务第一轮会调用 `Marketplace.search(SearchQuery)` 查找可用能力；如果 Reflector 判断需要重新搜索，会带着 `reflectionHint` 和 `excludeIds` 再搜一次，否则复用上一轮候选能力。默认的 `SimpleMarketplace` 从内存插件列表返回候选能力；生产环境可以换成自己的实现，让能力来自 DB、ES、向量库或多个来源的组合。
-
-```
-用户目标
-  |
-  v
-SearchQuery(goal, reflectionHint, excludeIds, topK)
-  |
-  v
-自定义 Marketplace
-  |
-  +-- DB：插件元数据、租户、权限、启停状态
-  +-- ES：名称、描述、标签关键词检索
-  +-- 向量库：按语义召回最相关能力
-  +-- 配置中心 / API：动态下发能力定义
-  |
-  v
-CapabilitySearchResult -> Planner 选择要执行的能力
-```
-
-| 场景 | 做法 |
-|------|------|
-| 插件很多，需要治理 | 把 `PluginDescriptor` / `CapabilityDescriptor` 存入 DB |
-| 需要租户和权限隔离 | 在 `search()` 中按 tenant、role、scope 过滤 |
-| 需要更准地找能力 | 用 ES 做关键词检索，或用向量库做语义召回 |
-| 需要综合排序 | 组合权限过滤、关键词分数、向量分数和业务权重 |
-
-`PluginManager` 更适合做“把外部来源加载进市场”的适配器；`Marketplace` 更适合做“运行时搜索和解析能力”的核心入口。能力规模较小时可以只扩展 `PluginManager`，能力规模大或需要复杂检索时建议直接实现 `Marketplace`。
-
-### 执行存储：把 Agent 过程变成可恢复、可审计的任务账本
-
-一次 `execute()` 不是黑盒调用。Regnexe 会把任务拆成多轮，每一轮都有 Search、Plan、Execute、Reflect 的结果。默认 `TaskStore` 是内存实现；生产环境可以替换为 DB 实现，把每一轮过程保存下来。
-
-```
-TaskExecutionState
-  |
-  +-- taskId / sessionId / status / currentRound
-  +-- searchResults
-  +-- rounds[]
-       |
-       +-- search
-       +-- plan
-       +-- executionResult
-       +-- reflection
-```
-
-这样做的价值是：
-
-- **暂停恢复**：任务暂停后，可以从 `TaskStore` 找到同一 session 下最近的可恢复任务。
-- **过程审计**：可以追踪 Agent 每轮搜到了什么能力、为什么选择、执行结果是什么、为什么继续或结束。
-- **问题排查**：失败时能看到是搜索不准、规划错误、工具失败，还是反思判断不合理。
-- **异步任务追踪**：长任务可以落库后由后台执行，前端按 `taskId` 查询状态和中间结果。
-
-### 三层上下文：分别解决不同问题
-
-```
-Session 记忆       多次任务之间共享的历史
-  |
-  v
-Task 执行账本      一次 execute()/resume() 的多轮循环记录
-  |
-  v
-Agent 执行上下文   单个 Agent 调工具时使用的上下文窗口
-```
-
-| 层级 | 说明 | 扩展方式 |
-|------|------|----------|
-| Session 记忆 | 用户会话级历史，用于让下一次任务知道之前聊过什么 | 替换 `ConversationStorage` |
-| Task 执行账本 | 一次目标执行的完整轮次记录，用于恢复、审计和排查 | 替换 `TaskStore` |
-| Agent 执行上下文 | 单个 Agent 执行工具时的上下文窗口策略 | 通过 `withAgentContext(...)` 配置 |
-
-简单理解：`ConversationStorage` 解决“这个用户之前说过什么”，`TaskStore` 解决“这个任务执行到哪一步”，`AgentContext` 解决“单次 Agent 调工具时带多少上下文”。三者可以独立替换，不需要改 Agent 主循环。
-
-## 暂停与恢复
-
-`pause()` 可以从任意线程调用。当前执行会被标记为 `PAUSED`，之后可按 session 恢复最近一个可恢复任务。
+`ConsoleEventListener`——本文档默认一直在用的——打印到 stdout，适合本地开发和测试：
 
 ```java
-TaskRequest request = new TaskRequest();
-request.setGoal("生成一份北京户外跑步建议");
-request.setSessionId("session-123");
+RegnexeAgent agent = regnexeAgentBuilder
+    .withTool(weatherTool)
+    .withEventListener(new ConsoleEventListener())
+    .build();
+```
+
+生产环境换成 `Slf4jEventListener` 即可：格式化逻辑完全一样，但通过 SLF4J 输出，这样追踪日志会汇入你应用现有的日志管道，而不是独立的一条 println 输出流：
+
+```java
+regnexeAgentBuilder.withEventListener(new Slf4jEventListener()) ...
+```
+
+两者都继承自 `AbstractEventListener`，它提供了两个构造参数用来屏蔽噪音事件组，不需要自己写 `shouldHandle`：
+
+```java
+new ConsoleEventListener(false, false);   // showTokenEvents=false, showLlmEvents=false
+new Slf4jEventListener(true, true);       // 全部显示，包括 token 用量和原始 LLM 文本
+```
+
+想写自己的监听器，继承 `AbstractEventListener`（或者直接实现 `AgentEventListener` 获得完全的过滤控制权）——重写 `onEvent`，需要的话再重写 `shouldHandle` 精确挑选关心的 `EventType`。
+
+## 9. 暂停与恢复
+
+`pause()` 可以从任意线程调用，线程安全。当前执行会被标记为 `PAUSED` 并持久化到配置的 `TaskStore`；`resume()` 会找到该 session 下最近一个可恢复任务，带着新上下文继续。代码见 [`ExampleReadme08PauseResumeTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme08PauseResumeTest.java)。
+
+```java
+RegnexeAgent agent = regnexeAgentBuilder
+    .withTool(weatherTool)
+    .withTaskStore(new InMemoryTaskStore())   // 暂停/恢复必须要有持久化状态
+    .build();
 
 Future<AgentResult> future = executor.submit(() -> agent.execute(request));
 
-agent.pause();
-AgentResult paused = future.get();
+agent.pause();                       // 可以从任意线程调用
+AgentResult paused = future.get();   // status == PAUSED
 
-AgentResult done = agent.resume(
-    paused.getState().getSessionId(),
-    "请同时考虑今天的空气质量指数。"
-);
+AgentResult done = agent.resume(sessionId, "请同时考虑今天的空气质量指数。");
+// done.getStatus() == FINISHED
 ```
-
-默认 `TaskStore` 是 `InMemoryTaskStore`。如果需要跨进程或服务重启后恢复任务，请通过 `withTaskStore(taskStore)` 接入你自己的持久化实现。
-
-## 会话记忆
-
-Regnexe 可以按 `sessionId` 记录对话摘要，后续任务会看到同一会话中的历史信息。
-
-```java
-RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
-    .withPlugin(new WeatherPlugin())
-    .withSessionStorage(new InMemoryConversationStorage())
-    .withSessionBufferSize(10)
-    .build();
-
-TaskRequest first = new TaskRequest();
-first.setSessionId("session-123");
-first.setGoal("查询北京今天的天气");
-agent.execute(first);
-
-TaskRequest second = new TaskRequest();
-second.setSessionId("session-123");
-second.setGoal("根据你刚才查到的天气，建议我今天穿什么？");
-agent.execute(second);
-```
-
-默认会话存储也是内存实现。生产环境中如需长期记忆或多实例共享，需要替换为自己的 `ConversationStorage`。也可以通过 `withSessionMemory(memory)` 提供自定义 `ConversationMemory`，但该实例应只绑定一个 session，不能在并发执行之间共享。
 
 ## 参考文档
 
@@ -479,25 +475,23 @@ agent.execute(second);
 
 | 方法 | 默认值 | 说明 |
 |------|--------|------|
+| `withDefaultModel(Vendor, String)` | - | 指定 LLM 厂商和模型名称 |
 | `withDefaultModel(String)` | - | 只指定模型名，由 `DefaultModelProvider` 按前缀路由 |
-| `withDefaultModel(String, String)` | - | 指定厂商字符串和模型名称 |
-| `withDefaultModel(Vendor, String)` | - | 类型安全地指定 LLM 厂商和模型名称 |
-| `withDefaultModel(BaseChatModel)` | - | 直接给主 Agent 使用一个 LLM 实例 |
 | `withLlmProvider(ModelProvider)` | `DefaultModelProvider` | 自定义模型提供者 |
+| `withTool(Tool...)` | - | 直接注册已构建的 Tool 为 MCP_TOOL 能力（自动创建市场） |
+| `withSkill(SkillConfig...)` | - | 直接注册 SKILL 能力（自动创建市场） |
+| `withSubAgent(SubAgentConfig...)` | - | 直接注册 SUB_AGENT 能力（自动创建市场） |
 | `withPlugin(Object...)` | - | 注册一个或多个 `@Plugin` 对象 |
+| `withPlugin(PluginDescriptor...)` | - | 直接安装已构建好的 `PluginDescriptor` 对象（自动创建市场） |
 | `withScanPackages(String...)` | - | 扫描包并发现 `@Plugin` 类 |
 | `withDirectory(String...)` | - | 从文件系统目录加载插件 |
 | `withPluginMarket(Marketplace)` | 空 `SimpleMarketplace` | 完全接管插件市场 |
-| `withMaxRounds(int)` | `10` | 最大 Search -> Plan -> Execute -> Reflect 轮次 |
-| `withMaxAgentIterations(int)` | `20` | Skill/Sub-Agent 内部最大迭代次数 |
-| `withMaxContextOutputChars(int)` | `800` | 每条上下文输出最多保留字符数 |
-| `withVerbose(boolean)` | `false` | 开启内部执行器详细输出 |
-| `withEventListener(AgentEventListener)` | `NO_OP` | 监听运行时事件 |
+| `withMaxRounds(int)` | `10` | 最大推理轮次 |
+| `withEventListener(AgentEventListener)` | `NO_OP` | 监听 Agent 启动、执行、完成等事件 |
 | `withTaskStore(TaskStore)` | `InMemoryTaskStore` | 任务状态存储，影响暂停和恢复 |
 | `withResultComposer(ResultComposer)` | `DefaultResultComposer` | 最终答案组装策略 |
 | `withSessionStorage(ConversationStorage)` | `InMemoryConversationStorage` | 会话记忆存储 |
 | `withSessionBufferSize(int)` | `10` | 触发摘要压缩前保留的消息数 |
-| `withSessionMemory(ConversationMemory)` | 自动创建 | 自定义会话记忆实例 |
 | `withAgentContext(AgentContext)` | `FullContext` | 上下文窗口策略 |
 
 </details>
@@ -537,4 +531,7 @@ agent.execute(second);
 
 ---
 
-[English README](README.md) · [发布说明](docs/release/pr-0.1.1.md) · [License](LICENSE)
+如果 Regnexe 对你有帮助，欢迎点个 Star。  
+有企业集成需求、定制场景或问题反馈，欢迎提 Issue。
+
+[English README](README.md) · [License](LICENSE)

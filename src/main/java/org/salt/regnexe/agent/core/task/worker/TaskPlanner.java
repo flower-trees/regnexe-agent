@@ -16,10 +16,11 @@ package org.salt.regnexe.agent.core.task.worker;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.tuple.Pair;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.util.ExecutionRecordFormatter;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -29,16 +30,22 @@ import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilityCandidate;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
+import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
+import org.salt.jlangchain.core.history.HistoryInfos;
 import org.salt.jlangchain.core.llm.BaseChatModel;
+import org.salt.jlangchain.core.message.BaseMessage;
+import org.salt.jlangchain.core.message.MessageType;
 import org.salt.jlangchain.core.parser.StrOutputParser;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
-import org.salt.jlangchain.core.prompt.chat.ChatPromptTemplate;
+import org.salt.jlangchain.core.prompt.value.ChatPromptValue;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -56,13 +63,37 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - Select only capabilities that are genuinely relevant to the goal.
             - The narrative should be clear, actionable instructions for the executor.
             - CRITICAL: every capability name you mention in the narrative MUST also appear in selectedCapabilityIds.
+            - TOOL DEPENDENCIES: If a selected SKILL or SUB_AGENT lists allowedTools, you MUST also include each \
+              allowed tool id in selectedCapabilityIds. These tools are inherited dependencies for that capability; \
+              include them so the executor can make them available, but do not present them as separate top-level \
+              user tasks unless the user explicitly asked to call them directly.
             - For each selected capability, write a focused input description in capabilityInputDescriptions: \
               describe what context to pass when invoking it (e.g. user goal, specific data, or the output \
               of a preceding capability). Be specific — the executor uses these descriptions to construct \
               the actual input and will not re-read the full narrative.
+            - DATA MATERIALIZATION: If the input to a capability requires data that already appears in the \
+              Goal or session history (e.g. existing topics, user modification feedback, chapter content), \
+              you MUST copy that data verbatim into capabilityInputDescriptions. Never use references such \
+              as "see above", "as described", or "from the goal" — the executor has no access to those references.
             - EFFICIENCY: prefer the shortest execution path that achieves the goal. If a capability \
               description states it already returns or saves the needed data, do NOT add another capability \
               solely to re-read or re-save that same data.
+            - UNIQUE IDs: selectedCapabilityIds must contain each capability ID at most once. \
+              If the goal involves conditional retries (e.g. "if QC fails, retry"), list the capability \
+              once — the executor agent will call it again as needed based on the narrative.
+            - RESUME CONTEXT: When previous execution records are provided, use them as completed evidence. \
+              If those records already contain enough information to satisfy the goal and supplement, you may \
+              set selectedCapabilityIds to an empty array and instruct the executor to answer from the existing \
+              records without calling tools again.
+            - RESULT STRATEGY: Choose resultStrategy based on the user's deliverable semantics:
+              * RETURN_LAST: use only when the final selected capability is expected to produce the complete \
+                user-facing answer and earlier capability results are merely intermediate inputs.
+              * SYNTHESIZE: use when the user asks for multiple deliverables, multiple independent tasks, \
+                comparisons, a combined report, or when outputs from more than one capability must appear \
+                in the final answer.
+            - FINAL ANSWER REQUIREMENTS: list the concrete user-facing items the executor's final answer \
+              must include. For SYNTHESIZE, include every required deliverable. For RETURN_LAST, include \
+              the single complete deliverable expected from the final capability.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
@@ -73,6 +104,8 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 "<id1>": "<what to pass as input to this capability>",
                 "<id2>": "<what to pass; may reference the output of id1>"
               },
+              "resultStrategy": "<use exactly RETURN_LAST or SYNTHESIZE>",
+              "finalAnswerRequirements": ["<required item 1>", "<required item 2>"],
               "reasoning": "<why you chose these capabilities>"
             }
             """;
@@ -83,24 +116,36 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
     public Object process(Object input) {
         IContextBus bus = getContextBus();
         TaskExecutionState state = bus.getTransmit(ContextBusKeys.STATE);
+        if (state.getStatus() != TaskStatus.RUNNING) {
+            log.debug("TaskPlanner skipped because task status is {}", state.getStatus());
+            return null;
+        }
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
         ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
         List<CapabilityCandidate> candidates = bus.getTransmit(ContextBusKeys.CANDIDATES);
-        String sessionSummary = bus.getTransmit(ContextBusKeys.SESSION_SUMMARY);
+        List<HistoryInfos> sessionHistory = bus.getTransmit(ContextBusKeys.SESSION_HISTORY);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
+        boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
         String taskId = state.getTaskId();
         int round = state.getCurrentRound();
         FlowInstance flow = buildFlow(chainActor, llm,
-                text -> listener.onEvent(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
+                text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
-        String userPrompt = buildPrompt(state, candidates, sessionSummary);
-        ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
+        String candidateNames = candidates == null ? "" : candidates.stream()
+                .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
+        listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
+                "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
+
+        ChatPromptValue prompt = buildChatPrompt(state, candidates, sessionHistory, resumeMode);
+        ChatGeneration result = chainActor.invoke(flow, prompt);
 
         PlanOutput plan = parsePlan(result.getText());
+        normalizePlan(plan);
+        expandSelectedAllowedTools(plan, candidates);
 
         bus.putTransmit(ContextBusKeys.PLAN_NARRATIVE, plan.getNarrative());
         bus.putTransmit(ContextBusKeys.SELECTED_CAPS, plan.getSelectedCapabilityIds());
@@ -109,8 +154,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         currentRound(state).setPlan(plan);
         state.setUpdatedAt(System.currentTimeMillis());
 
-        listener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
-                "Selected: " + plan.getSelectedCapabilityIds() + " | " + plan.getNarrative()));
+        listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
+                "Selected: " + plan.getSelectedCapabilityIds()
+                + " | Strategy: " + plan.getResultStrategy()
+                + " | " + plan.getNarrative()));
         log.debug("Round {}: plan produced, selected caps: {}",
                 state.getCurrentRound(), plan.getSelectedCapabilityIds());
 
@@ -120,10 +167,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
     private FlowInstance buildFlow(ChainActor chainActor, BaseChatModel llm, Consumer<String> onLlm) {
         return chainActor.builder()
-                .next(ChatPromptTemplate.fromMessages(List.of(
-                        Pair.of("system", SYSTEM_PROMPT),
-                        Pair.of("human", "${prompt}")
-                )))
                 .next(input -> {
                     if (onLlm != null) onLlm.accept(input.toString());
                     return input;
@@ -133,54 +176,99 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 .build();
     }
 
-    private String buildPrompt(TaskExecutionState state,
-                               List<CapabilityCandidate> candidates,
-                               String sessionSummary) {
-        StringBuilder sb = new StringBuilder();
+    private ChatPromptValue buildChatPrompt(TaskExecutionState state,
+                                            List<CapabilityCandidate> candidates,
+                                            List<HistoryInfos> sessionHistory,
+                                            boolean resumeMode) {
+        List<BaseMessage> messages = new ArrayList<>();
 
-        if (sessionSummary != null && !sessionSummary.isBlank()) {
-            sb.append("== Session history ==\n").append(sessionSummary).append("\n\n");
+        // ── System message: SYSTEM_PROMPT + SUMMARY + capabilities ───────────
+        StringBuilder systemSb = new StringBuilder(SYSTEM_PROMPT);
+
+        if (sessionHistory != null) {
+            for (HistoryInfos h : sessionHistory) {
+                if (h.getType() == HistoryInfos.Type.SUMMARY) {
+                    for (BaseMessage msg : h.getMessages()) {
+                        systemSb.append("\n\n").append(msg.getContent());
+                    }
+                }
+            }
         }
 
-        sb.append("Goal: ").append(state.getRequest().getGoal()).append("\n\n");
+        systemSb.append("\n\nAvailable capabilities:\n");
+        if (candidates != null) {
+            candidates.forEach(c -> systemSb.append("- ").append(c.getCapabilityId())
+                    .append(" (").append(c.getName()).append("): ")
+                    .append(c.getDescription())
+                    .append(formatAllowedTools(c))
+                    .append("\n"));
+        }
+
+        messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), systemSb.toString()));
+
+        // ── NORMAL history as actual Human/AI message pairs ───────────────────
+        boolean hasHistory = false;
+        if (sessionHistory != null) {
+            for (HistoryInfos h : sessionHistory) {
+                if (h.getType() != HistoryInfos.Type.NORMAL) continue;
+                for (BaseMessage msg : h.getMessages()) {
+                    messages.add(BaseMessage.fromMessage(msg.getRole(), msg.getContent()));
+                }
+                hasHistory = true;
+            }
+        }
+
+        // ── Separator: break few-shot mimicking before the current goal ───────
+        if (hasHistory) {
+            messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(),
+                    "The conversation history above is provided for context only. " +
+                    "Now output a JSON execution plan for the new goal below. " +
+                    "Do NOT replicate any prior response format — output ONLY the JSON object."));
+        }
+
+        // ── Current goal HumanMessage ─────────────────────────────────────────
+        StringBuilder humanSb = new StringBuilder();
+        humanSb.append("Goal: ").append(state.getRequest().getGoal());
 
         String supplement = state.getRequest().getSupplementInput();
         if (supplement != null && !supplement.isBlank()) {
-            sb.append("== User supplement ==\n").append(supplement).append("\n\n");
+            humanSb.append("\n\n== User supplement ==\n").append(supplement);
         }
 
-        sb.append("Available capabilities:\n");
-        if (candidates != null) {
-            candidates.forEach(c -> sb.append("- ").append(c.getCapabilityId())
-                    .append(" (").append(c.getName()).append("): ")
-                    .append(c.getDescription()).append("\n"));
+        if (resumeMode) {
+            String previousRecords = ExecutionRecordFormatter.formatPreviousExecutionRecords(state);
+            if (!previousRecords.isBlank()) {
+                humanSb.append("\n\n== Previous execution records before resume ==\n")
+                       .append(previousRecords)
+                       .append("\n\nIf these previous records already satisfy the goal and supplement, do not select tools again.");
+            }
         }
 
         ReflectionHint lastHint = lastHint(state);
         if (lastHint != null) {
-            sb.append("\nGuidance from previous round:\n");
+            humanSb.append("\n\nGuidance from previous round:");
             if (lastHint.getPlanAdjustment() != null) {
-                sb.append("- Adjustment: ").append(lastHint.getPlanAdjustment()).append("\n");
+                humanSb.append("\n- Adjustment: ").append(lastHint.getPlanAdjustment());
             }
             if (lastHint.getAvoidCapabilityIds() != null && !lastHint.getAvoidCapabilityIds().isEmpty()) {
-                sb.append("- Avoid: ").append(String.join(", ", lastHint.getAvoidCapabilityIds())).append("\n");
+                humanSb.append("\n- Avoid: ").append(String.join(", ", lastHint.getAvoidCapabilityIds()));
             }
             if (lastHint.getReason() != null) {
-                sb.append("- Reason: ").append(lastHint.getReason()).append("\n");
+                humanSb.append("\n- Reason: ").append(lastHint.getReason());
             }
         }
 
         List<RoundRecord> rounds = state.getRounds();
         if (rounds.size() > 1) {
-            sb.append("\nPrevious round summary:\n");
             RoundRecord prev = rounds.get(rounds.size() - 2);
             if (prev.getExecutionResult() != null && prev.getExecutionResult().getFinalText() != null) {
-                String text = prev.getExecutionResult().getFinalText();
-                sb.append(text.length() > 500 ? text.substring(0, 500) + "..." : text).append("\n");
+                humanSb.append("\n\nPrevious round summary:\n").append(prev.getExecutionResult().getFinalText());
             }
         }
 
-        return sb.toString();
+        messages.add(BaseMessage.fromMessage(MessageType.HUMAN.getCode(), humanSb.toString()));
+
+        return ChatPromptValue.builder().messages(messages).build();
     }
 
     private PlanOutput parsePlan(String text) {
@@ -199,6 +287,41 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 return fallback;
             }
         }
+    }
+
+    private void normalizePlan(PlanOutput plan) {
+        if (plan == null) return;
+        if (plan.getSelectedCapabilityIds() == null) {
+            plan.setSelectedCapabilityIds(List.of());
+        }
+        if (plan.getCapabilityInputDescriptions() == null) {
+            plan.setCapabilityInputDescriptions(java.util.Collections.emptyMap());
+        }
+        if (plan.getResultStrategy() == null) {
+            plan.setResultStrategy(ResultStrategy.SYNTHESIZE);
+        }
+        if (plan.getFinalAnswerRequirements() == null) {
+            plan.setFinalAnswerRequirements(List.of());
+        }
+    }
+
+    private void expandSelectedAllowedTools(PlanOutput plan, List<CapabilityCandidate> candidates) {
+        if (plan == null || plan.getSelectedCapabilityIds() == null || candidates == null) return;
+
+        Set<String> selected = new LinkedHashSet<>(plan.getSelectedCapabilityIds());
+        for (CapabilityCandidate candidate : candidates) {
+            if (!selected.contains(candidate.getCapabilityId())) continue;
+            if (candidate.getAllowedTools() == null || candidate.getAllowedTools().isEmpty()) continue;
+            selected.addAll(candidate.getAllowedTools());
+        }
+        plan.setSelectedCapabilityIds(new ArrayList<>(selected));
+    }
+
+    private String formatAllowedTools(CapabilityCandidate candidate) {
+        if (candidate.getAllowedTools() == null || candidate.getAllowedTools().isEmpty()) {
+            return "";
+        }
+        return " | allowedTools: " + String.join(", ", candidate.getAllowedTools());
     }
 
     private String extractJson(String text) {

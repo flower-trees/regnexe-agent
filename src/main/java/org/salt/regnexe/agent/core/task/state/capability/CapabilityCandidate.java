@@ -17,6 +17,7 @@ package org.salt.regnexe.agent.core.task.state.capability;
 import lombok.Data;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,6 +35,8 @@ public class CapabilityCandidate {
     private String name;
 
     private String description;
+
+    private List<String> allowedTools;
 
     private double score;
 

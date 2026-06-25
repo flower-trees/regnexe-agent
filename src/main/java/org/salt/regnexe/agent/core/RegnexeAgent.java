@@ -144,11 +144,11 @@ public class RegnexeAgent {
         TaskExecutionState state = initState(request);
         taskStore.save(state);
 
-        eventListener.onEvent(AgentEvent.of(state.getTaskId(), 0, EventType.AGENT_STARTED,
+        eventListener.dispatch(AgentEvent.of(state.getTaskId(), 0, EventType.AGENT_STARTED,
                 "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds));
 
-        String sessionSummary = loadSessionSummary(state.getSessionId());
-        return runLoop(state, sessionSummary);
+        List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
+        return runLoop(state, sessionHistory, false);
     }
 
     /**
@@ -170,13 +170,13 @@ public class RegnexeAgent {
             state.getRequest().setSupplementInput(supplementInput);
         }
 
-        eventListener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+        eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_STARTED,
                 "Resuming | rounds done: " + state.getCurrentRound()
                 + (supplementInput != null ? " | supplement: " + supplementInput : "")));
 
-        String sessionSummary = loadSessionSummary(state.getSessionId());
-        return runLoop(state, sessionSummary);
+        List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
+        return runLoop(state, sessionHistory, true);
     }
 
     /**
@@ -193,11 +193,11 @@ public class RegnexeAgent {
 
     // ── Loop ─────────────────────────────────────────────────────────────────
 
-    private AgentResult runLoop(TaskExecutionState state, String sessionSummary) {
+    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory, boolean resumeMode) {
         AtomicBoolean stopSignal = new AtomicBoolean(false);
         this.activeStopSignal = stopSignal;
 
-        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionSummary);
+        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory, resumeMode);
 
         // Loop condition uses state.getCurrentRound() so resume continues correctly
         // from wherever the prior execution left off.
@@ -232,10 +232,13 @@ public class RegnexeAgent {
         String finalText = resultComposer.compose(state, lastDecision);
 
         if (state.getStatus() == TaskStatus.FINISHED || state.getStatus() == TaskStatus.ESCALATED) {
-            storeSessionRound(state.getSessionId(), state.getRequest().getGoal(), finalText);
+            String displayGoal = state.getRequest().getDisplayGoal();
+            String humanTurn = (displayGoal != null && !displayGoal.isBlank())
+                    ? displayGoal : state.getRequest().getGoal();
+            storeSessionRound(state.getSessionId(), humanTurn, finalText);
         }
 
-        eventListener.onEvent(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+        eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_COMPLETED,
                 "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()));
 
@@ -249,7 +252,8 @@ public class RegnexeAgent {
 
     private Map<String, Object> buildTransmitMap(TaskExecutionState state,
                                                   AtomicBoolean stopSignal,
-                                                  String sessionSummary) {
+                                                  List<HistoryInfos> sessionHistory,
+                                                  boolean resumeMode) {
         Map<String, Object> map = new HashMap<>();
         map.put(ContextBusKeys.STATE, state);
         map.put(ContextBusKeys.CHAIN_ACTOR, chainActor);
@@ -266,9 +270,10 @@ public class RegnexeAgent {
         if (marketplace != null) {
             map.put(ContextBusKeys.MARKETPLACE, marketplace);
         }
-        if (sessionSummary != null) {
-            map.put(ContextBusKeys.SESSION_SUMMARY, sessionSummary);
+        if (sessionHistory != null && !sessionHistory.isEmpty()) {
+            map.put(ContextBusKeys.SESSION_HISTORY, sessionHistory);
         }
+        map.put(ContextBusKeys.RESUME_MODE, resumeMode);
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
         map.put(ContextBusKeys.MAX_CONTEXT_OUTPUT_CHARS, maxContextOutputChars);
         map.put(ContextBusKeys.VERBOSE, verbose);
@@ -294,7 +299,7 @@ public class RegnexeAgent {
 
     // ── Session memory helpers ───────────────────────────────────────────────
 
-    private String loadSessionSummary(String sessionId) {
+    private List<HistoryInfos> loadSessionHistory(String sessionId) {
         List<HistoryInfos> history;
         if (sessionMemory != null) {
             history = sessionMemory.readHistory();
@@ -306,27 +311,7 @@ public class RegnexeAgent {
         } else {
             return null;
         }
-        if (history == null || history.isEmpty()) return null;
-        return formatHistory(history);
-    }
-
-    private String formatHistory(List<HistoryInfos> history) {
-        StringBuilder sb = new StringBuilder();
-        for (HistoryInfos h : history) {
-            if (h.getType() == HistoryInfos.Type.SUMMARY) {
-                for (BaseMessage msg : h.getMessages()) {
-                    sb.append(msg.getContent()).append("\n");
-                }
-            } else {
-                for (BaseMessage msg : h.getMessages()) {
-                    String role = MessageType.HUMAN.getCode().equals(msg.getRole())
-                            ? "User" : "Assistant";
-                    sb.append(role).append(": ").append(msg.getContent()).append("\n");
-                }
-                sb.append("\n");
-            }
-        }
-        return sb.toString().trim();
+        return (history == null || history.isEmpty()) ? null : history;
     }
 
     private void storeSessionRound(String sessionId, String goal, String answer) {

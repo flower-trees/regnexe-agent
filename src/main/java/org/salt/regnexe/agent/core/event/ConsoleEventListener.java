@@ -16,29 +16,16 @@ package org.salt.regnexe.agent.core.event;
 
 /**
  * Prints each event to stdout. Suitable for CLI and test output.
+ * Extends {@link AbstractEventListener} to inherit token / LLM filtering via constructor flags.
  */
-public class ConsoleEventListener implements AgentEventListener {
+public class ConsoleEventListener extends AbstractEventListener {
 
-    protected String format(AgentEvent event) {
-        String prefix = switch (event.getType()) {
-            case AGENT_STARTED        -> "[Agent         ]";
-            case SEARCH_COMPLETED     -> "[Search        ]";
-            case PLAN_COMPLETED       -> "[Plan          ]";
-            case TOOL_CALLED          -> "[Execute Call  ]";
-            case TOOL_RESULT          -> "[Execute Result]";
-            case LLM_RESPONDED        -> "[Execute LLM   ]";
-            case PLAN_LLM_RESPONDED   -> "[Plan LLM      ]";
-            case REFLECT_LLM_RESPONDED-> "[Reflect LLM   ]";
-            case SKILL_LLM_RESPONDED  -> "[Skill LLM     ]";
-            case AGENT_LLM_RESPONDED  -> "[SubAgent LLM  ]";
-            case EXECUTION_COMPLETED  -> "[Execute       ]";
-            case REFLECTION_COMPLETED -> "[Reflect       ]";
-            case AGENT_COMPLETED      -> "[Done          ]";
-            case TOKEN_USAGE          -> "[Token Usage   ]";
-            case CAPABILITY_TOKEN_USAGE -> "[Cap Token Usage]";
-            case TASK_TOKEN_SUMMARY    -> "[Task Token     ]";
-        };
-        return String.format("%s R%d %s", prefix, event.getRound(), event.getText());
+    public ConsoleEventListener() {
+        super();
+    }
+
+    public ConsoleEventListener(boolean showTokenEvents, boolean showLlmEvents) {
+        super(showTokenEvents, showLlmEvents);
     }
 
     @Override

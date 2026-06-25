@@ -12,11 +12,14 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core;
+package org.salt.regnexe.agent.core.example;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.salt.regnexe.agent.core.RegnexeAgent;
+import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
+import org.salt.regnexe.agent.core.TestApplication;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
@@ -33,11 +36,11 @@ import org.springframework.test.context.junit4.SpringRunner;
 import java.util.List;
 
 /**
- * M0 smoke test: single-round weather query.
+ * Example 01: single-round weather query.
  *
  * Scenario
  * --------
- * Goal  : "查询北京今天的天气，告诉我今天是否适合户外跑步"
+ * Goal  : "Check today's weather in Beijing and tell me whether it is suitable for outdoor running."
  * Tool  : get_weather — returns deterministic fake data so the test is repeatable
  * Expect: agent finishes in at most 3 rounds with FINISHED status
  *
@@ -47,7 +50,7 @@ import java.util.List;
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
-public class WeatherForecastTest {
+public class Example01WeatherForecastTest {
 
     @Autowired
     private RegnexeAgentBuilder regnexeAgentBuilder;
@@ -61,29 +64,29 @@ public class WeatherForecastTest {
                 .capabilityId("get_weather")
                 .pluginId("weather-plugin")
                 .type(CapabilityType.MCP_TOOL)
-                .name("get_weather")
-                .description("获取指定城市今天的天气，包括温度、天气状况、空气质量和运动适宜度。输入城市名称（中文）。")
                 .tags(List.of("weather", "outdoor"))
                 .tool(Tool.builder()
                         .name("get_weather")
-                        .description("获取指定城市今天的天气")
-                        .params("city: String -- 城市名称，例如：北京、上海")
+                        .description("Gets today's weather for a given city, including temperature, conditions, air quality, and exercise suitability.")
+                        .params("city: String -- city name, for example: Beijing or Shanghai")
                         .func(city -> {
                             String cityStr = city != null ? city.toString() : "";
-                            if (cityStr.contains("北京")) {
-                                return "北京今日天气：晴，气温 22°C，湿度 40%，风速 2 级，空气质量优（AQI 35）。" +
-                                       "非常适合户外跑步，建议上午 7-9 点或傍晚 5-7 点出行。";
+                            if (cityStr.contains("Beijing")) {
+                                return "Beijing weather today: sunny, 22°C, 40% humidity, level 2 wind, excellent air quality (AQI 35). " +
+                                       "It is very suitable for outdoor running. Recommended times are 7-9 AM or 5-7 PM.";
                             }
-                            return cityStr + " 天气：多云，气温 18°C，轻度污染，建议减少户外剧烈运动。";
+                            return cityStr + " weather: cloudy, 18°C, light pollution. Reduce strenuous outdoor exercise.";
                         })
                         .build())
                 .build();
+        Assert.assertEquals(weatherCap.getTool().getName(), weatherCap.getName());
+        Assert.assertEquals(weatherCap.getTool().getDescription(), weatherCap.getDescription());
 
         PluginDescriptor weatherPlugin = PluginDescriptor.builder()
                 .pluginId("weather-plugin")
                 .version("1.0")
                 .name("Weather Plugin")
-                .description("实时天气查询插件")
+                .description("Realtime weather lookup plugin")
                 .capabilities(List.of(weatherCap))
                 .build();
 
@@ -101,7 +104,7 @@ public class WeatherForecastTest {
 
         // ── Execute ──────────────────────────────────────────────────────────
 
-        AgentResult result = agent.execute("查询北京今天的天气，告诉我今天是否适合户外跑步");
+        AgentResult result = agent.execute("Check today's weather in Beijing and tell me whether it is suitable for outdoor running.");
 
         System.out.println("\n========== RegnexeAgent Result ==========");
         System.out.println("Status   : " + result.getStatus());

@@ -20,4 +20,24 @@ public interface AgentEventListener {
     AgentEventListener NO_OP = event -> {};
 
     void onEvent(AgentEvent event);
+
+    /**
+     * Override to declare which event types this listener cares about.
+     * The framework calls {@link #dispatch} instead of {@link #onEvent} directly,
+     * so returning {@code false} here prevents {@code onEvent} from being invoked at all.
+     * Default: handle every event.
+     */
+    default boolean shouldHandle(EventType type) {
+        return true;
+    }
+
+    /**
+     * Framework entry point. Checks {@link #shouldHandle} before delegating to {@link #onEvent}.
+     * Lambda / NO_OP implementations inherit this without any change.
+     */
+    default void dispatch(AgentEvent event) {
+        if (shouldHandle(event.getType())) {
+            onEvent(event);
+        }
+    }
 }

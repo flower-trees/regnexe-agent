@@ -12,11 +12,14 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core;
+package org.salt.regnexe.agent.core.example;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.salt.regnexe.agent.core.RegnexeAgent;
+import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
+import org.salt.regnexe.agent.core.TestApplication;
 import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
@@ -37,14 +40,14 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * M1 session-memory smoke test.
+ * Example 06: session-memory smoke test.
  *
  * Scenario
  * --------
  * Two sequential execute() calls share the same sessionId and a custom
  * InMemoryConversationStorage. After the first call completes, the storage
  * must contain a history entry. The second call should succeed, and a follow-up
- * question that relies on prior context ("根据刚才的天气建议") is answered
+ * question that relies on prior context ("based on the weather advice from before") is answered
  * without needing to re-query the tool.
  *
  * Verification
@@ -60,7 +63,7 @@ import java.util.UUID;
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
-public class SessionMemoryTest {
+public class Example06SessionMemoryTest {
 
     @Autowired
     private RegnexeAgentBuilder regnexeAgentBuilder;
@@ -77,14 +80,14 @@ public class SessionMemoryTest {
 
         Tool weatherTool = Tool.builder()
                 .name("get_weather")
-                .description("获取指定城市今天的天气，包括温度和运动建议。")
-                .params("city: String -- 城市名称（中文）")
+                .description("Gets today's weather for a given city, including temperature and exercise advice.")
+                .params("city: String -- city name")
                 .func(city -> {
                     String c = city != null ? city.toString() : "";
-                    if (c.contains("北京")) {
-                        return "北京今日：晴，22°C，空气优良，非常适合户外跑步。";
+                    if (c.contains("Beijing")) {
+                        return "Beijing today: sunny, 22°C, excellent air quality, very suitable for outdoor running.";
                     }
-                    return c + "：多云，18°C，建议减少户外活动。";
+                    return c + ": cloudy, 18°C. Reduce outdoor activity.";
                 })
                 .build();
 
@@ -92,8 +95,6 @@ public class SessionMemoryTest {
                 .capabilityId("get_weather")
                 .pluginId("weather-plugin")
                 .type(CapabilityType.MCP_TOOL)
-                .name("get_weather")
-                .description("获取指定城市今天的天气，包括温度和运动建议。")
                 .tags(List.of("weather"))
                 .tool(weatherTool)
                 .build();
@@ -101,7 +102,7 @@ public class SessionMemoryTest {
         SimpleMarketplace marketplace = new SimpleMarketplace();
         marketplace.install(PluginDescriptor.builder()
                 .pluginId("weather-plugin").version("1.0")
-                .name("Weather Plugin").description("天气查询")
+                .name("Weather Plugin").description("Weather query")
                 .capabilities(List.of(weatherCap))
                 .build());
 
@@ -118,7 +119,7 @@ public class SessionMemoryTest {
         // ── Execute 1: fetch weather ──────────────────────────────────────────
 
         TaskRequest req1 = new TaskRequest();
-        req1.setGoal("查询北京今天的天气，告诉我是否适合户外跑步");
+        req1.setGoal("Check today's weather in Beijing and tell me whether it is suitable for outdoor running.");
         req1.setSessionId(sessionId);
 
         AgentResult result1 = agent.execute(req1);
@@ -144,7 +145,7 @@ public class SessionMemoryTest {
         // session summary and should answer directly.
 
         TaskRequest req2 = new TaskRequest();
-        req2.setGoal("根据你刚才查到的北京天气，建议我今天出门跑步应该注意什么？不需要再查天气了，直接给建议。");
+        req2.setGoal("Based on the Beijing weather you checked earlier, what should I watch out for if I go running today? Do not check the weather again; just give advice.");
         req2.setSessionId(sessionId);
 
         AgentResult result2 = agent.execute(req2);

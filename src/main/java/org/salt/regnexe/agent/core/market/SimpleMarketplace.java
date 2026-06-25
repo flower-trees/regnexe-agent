@@ -38,18 +38,40 @@ public class SimpleMarketplace implements Marketplace {
 
     private final Map<String, PluginDescriptor> plugins = new LinkedHashMap<>();
     private final Set<String> enabled = new HashSet<>();
+    private final Set<String> capabilityIds = new HashSet<>();
 
+    /**
+     * Rejects duplicate pluginId/capabilityId rather than silently overwriting.
+     * capabilityId in particular is echoed verbatim by the planner LLM for exact-match
+     * capability selection (see TaskPlanner) — a silent collision there would make two
+     * unrelated capabilities indistinguishable to the LLM.
+     */
     @Override
     public void install(PluginDescriptor plugin) {
-        plugins.put(plugin.getPluginId(), plugin);
-        enabled.add(plugin.getPluginId());
-        log.debug("Installed plugin: {}", plugin.getPluginId());
+        String pluginId = plugin.getPluginId();
+        if (plugins.containsKey(pluginId)) {
+            throw new IllegalStateException("Plugin already installed: " + pluginId);
+        }
+        List<CapabilityDescriptor> caps = plugin.getCapabilities() != null
+                ? plugin.getCapabilities() : List.of();
+        for (CapabilityDescriptor cap : caps) {
+            if (capabilityIds.contains(cap.getCapabilityId())) {
+                throw new IllegalStateException("Capability id already registered: " + cap.getCapabilityId());
+            }
+        }
+        caps.forEach(cap -> capabilityIds.add(cap.getCapabilityId()));
+        plugins.put(pluginId, plugin);
+        enabled.add(pluginId);
+        log.debug("Installed plugin: {}", pluginId);
     }
 
     @Override
     public void uninstall(String pluginId) {
-        plugins.remove(pluginId);
+        PluginDescriptor removed = plugins.remove(pluginId);
         enabled.remove(pluginId);
+        if (removed != null && removed.getCapabilities() != null) {
+            removed.getCapabilities().forEach(cap -> capabilityIds.remove(cap.getCapabilityId()));
+        }
     }
 
     @Override
@@ -82,6 +104,7 @@ public class SimpleMarketplace implements Marketplace {
                 c.setType(cap.getType());
                 c.setName(cap.getName());
                 c.setDescription(cap.getDescription());
+                c.setAllowedTools(allowedTools(cap));
                 c.setScore(1.0);
                 candidates.add(c);
             }
@@ -92,6 +115,20 @@ public class SimpleMarketplace implements Marketplace {
         result.setSearchStrategy("full_scan");
         result.setSearchedAt(System.currentTimeMillis());
         return result;
+    }
+
+    private List<String> allowedTools(CapabilityDescriptor cap) {
+        if (cap.getSkillConfig() != null) {
+            return cap.getSkillConfig().getAllowedTools() != null
+                    ? cap.getSkillConfig().getAllowedTools()
+                    : List.of();
+        }
+        if (cap.getSubAgentConfig() != null) {
+            return cap.getSubAgentConfig().getAllowedTools() != null
+                    ? cap.getSubAgentConfig().getAllowedTools()
+                    : List.of();
+        }
+        return List.of();
     }
 
     @Override
