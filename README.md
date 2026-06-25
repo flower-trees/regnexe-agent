@@ -54,7 +54,7 @@ This README goes from "one tool call" to the full framework, one layer at a time
 <dependency>
     <groupId>io.github.flower-trees</groupId>
     <artifactId>regnexe-agent</artifactId>
-    <version>0.1.1</version>
+    <version>0.1.2</version>
 </dependency>
 ```
 
