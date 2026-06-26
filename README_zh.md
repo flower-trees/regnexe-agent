@@ -10,6 +10,9 @@
   <img src="https://img.shields.io/badge/Java-17%2B-orange" alt="Java 17+"/>
   <img src="https://img.shields.io/badge/Spring%20Boot-3.x-green" alt="Spring Boot 3.x"/>
 </p>
+<p align="center">
+  简体中文 | <a href="README.md">English</a>
+</p>
 
 ---
 
