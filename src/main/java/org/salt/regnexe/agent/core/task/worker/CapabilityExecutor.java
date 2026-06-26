@@ -48,6 +48,7 @@ import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -98,8 +99,12 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         List<Tool> mcpTools = new ArrayList<>();
         List<Skill> skills = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
+        // Maps the name a capability is invoked under -> its CapabilityType, so logs can
+        // prefix each tool call with "<type>:<name>" (mcp_tool/skill/subagent). Names not
+        // present here (e.g. a sub-agent's private own-tools) get no type prefix.
+        Map<String, CapabilityType> typeByName = new HashMap<>();
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skills, subAgents,
-                maxAgentIterations, listener, taskId, round, verbose, toolExecutions);
+                maxAgentIterations, listener, taskId, round, verbose, toolExecutions, typeByName);
         PlanOutput plan = currentRound(state).getPlan();
         ResultStrategy resultStrategy = resolveResultStrategy(plan);
         boolean returnLastToolResult = resultStrategy == ResultStrategy.RETURN_LAST;
@@ -113,11 +118,12 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .onLlm(text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
                 .onToolCall(tc -> {
                     outerToolCall.set(tc);
-                    listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED, tc));
+                    listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
+                            labelToolCall(null, tc, typeByName)));
                 })
                 .onObservation(obs -> {
                     state.setLastToolResult(obs);
-                    String label = formatToolCallLabel(null, outerToolCall.get());
+                    String label = formatToolCallLabel(null, outerToolCall.get(), typeByName);
                     recordToolExecution(toolExecutions, round, label, outerToolCall.get(), obs);
                     listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
                             formatToolResult(label, obs)));
@@ -239,7 +245,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                      List<Tool> mcpTools, List<Skill> skills, List<SubAgent> subAgents,
                                      Integer maxIterations,
                                      AgentEventListener listener, String taskId, int round, boolean verbose,
-                                     List<ToolExecutionRecord> toolExecutions) {
+                                     List<ToolExecutionRecord> toolExecutions,
+                                     Map<String, CapabilityType> typeByName) {
         if (marketplace == null || capIds == null) return;
 
         Set<String> seenCapIds = new HashSet<>();
@@ -251,15 +258,19 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 continue;
             }
             switch (cap.getType()) {
-                case MCP_TOOL -> mcpTools.add(cap.getTool());
+                case MCP_TOOL -> {
+                    mcpTools.add(cap.getTool());
+                    if (cap.getTool() != null) typeByName.put(cap.getTool().getName(), CapabilityType.MCP_TOOL);
+                }
                 case SKILL -> {
                     if (cap.getSkillConfig() != null) {
+                        typeByName.put(cap.getName(), CapabilityType.SKILL);
                         Skill.Builder sb = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
                         if (verbose) {
                             sb.verbose(true);
                         } else {
                             String name = cap.getName();
-                            String scope = "[skill:" + name + "]";
+                            String scope = "[" + typeLabel(CapabilityType.SKILL) + ":" + name + "]";
                             AtomicReference<String> skillToolCall = new AtomicReference<>();
                             sb.onLlm(text -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.SKILL_LLM_RESPONDED,
@@ -267,11 +278,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             sb.onToolCall(tc -> {
                                 skillToolCall.set(tc);
                                 listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
-                                        scope + " " + tc));
+                                        labelToolCall(scope, tc, typeByName)));
                             });
                             sb.onObservation(obs -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                                              formatObservedToolResult(toolExecutions, round, scope, skillToolCall.get(), obs))));
+                                              formatObservedToolResult(toolExecutions, round, scope, skillToolCall.get(), obs, typeByName))));
                         }
                         String skillCapName = cap.getName();
                         sb.onTokenUsage(u -> listener.dispatch(
@@ -282,6 +293,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 }
                 case SUB_AGENT -> {
                     if (cap.getSubAgentConfig() != null) {
+                        typeByName.put(cap.getName(), CapabilityType.SUB_AGENT);
                         SubAgentConfig cfg = cap.getSubAgentConfig();
                         SubAgent.Builder ab = SubAgent.from(cfg, chainActor);
                         if (cfg.isInheritModel() || cfg.getModel() == null) {
@@ -303,7 +315,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             ab.verbose(true);
                         } else {
                             String name = cap.getName();
-                            String scope = "[subagent:" + name + "]";
+                            String scope = "[" + typeLabel(CapabilityType.SUB_AGENT) + ":" + name + "]";
                             AtomicReference<String> subAgentToolCall = new AtomicReference<>();
                             ab.onLlm(text -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.AGENT_LLM_RESPONDED,
@@ -311,11 +323,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             ab.onToolCall(tc -> {
                                 subAgentToolCall.set(tc);
                                 listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
-                                        scope + " " + tc));
+                                        labelToolCall(scope, tc, typeByName)));
                             });
                             ab.onObservation(obs -> listener.dispatch(
                                 AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                                              formatObservedToolResult(toolExecutions, round, scope, subAgentToolCall.get(), obs))));
+                                              formatObservedToolResult(toolExecutions, round, scope, subAgentToolCall.get(), obs, typeByName))));
                         }
                         String agentCapName = cap.getName();
                         ab.onTokenUsage(u -> listener.dispatch(
@@ -345,18 +357,43 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                     && dep.getTool() != null) {
                 mcpTools.add(dep.getTool());
                 existingNames.add(toolName);
+                typeByName.put(dep.getTool().getName(), CapabilityType.MCP_TOOL);
             }
         }
     }
 
-    private String formatToolCallLabel(String scope, String toolCallText) {
+    /** Renders a CapabilityType as its log prefix: mcp_tool / skill / subagent. */
+    private String typeLabel(CapabilityType type) {
+        return switch (type) {
+            case MCP_TOOL -> "mcp_tool";
+            case SKILL -> "skill";
+            case SUB_AGENT -> "subagent";
+        };
+    }
+
+    /**
+     * Builds the "<scope> <type>:<name>" label for a tool call (no arguments).
+     * The "<type>:" prefix is added only when the invoked name is a registered
+     * capability; unknown names (e.g. a sub-agent's private own-tools) keep the bare name.
+     */
+    private String formatToolCallLabel(String scope, String toolCallText, Map<String, CapabilityType> typeByName) {
         String name = extractToolName(toolCallText);
-        return scope == null || scope.isBlank() ? name : scope + " " + name;
+        CapabilityType type = typeByName.get(name);
+        String typed = type != null ? typeLabel(type) + ":" + name : name;
+        return scope == null || scope.isBlank() ? typed : scope + " " + typed;
+    }
+
+    /** Full tool-call log line: "<scope> <type>:<name> <args-json>". */
+    private String labelToolCall(String scope, String toolCallText, Map<String, CapabilityType> typeByName) {
+        String label = formatToolCallLabel(scope, toolCallText, typeByName);
+        String args = extractToolArguments(toolCallText);
+        return args.isBlank() ? label : label + " " + args;
     }
 
     private String formatObservedToolResult(List<ToolExecutionRecord> records, int round,
-                                            String scope, String rawToolCall, String observation) {
-        String label = formatToolCallLabel(scope, rawToolCall);
+                                            String scope, String rawToolCall, String observation,
+                                            Map<String, CapabilityType> typeByName) {
+        String label = formatToolCallLabel(scope, rawToolCall, typeByName);
         recordToolExecution(records, round, label, rawToolCall, observation);
         return formatToolResult(label, observation);
     }

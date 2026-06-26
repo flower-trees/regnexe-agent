@@ -15,26 +15,7 @@
 
 Regnexe 不是一次 LLM 工具调用的简单封装。它围绕一个目标运行完整的 **Search -> Plan -> Execute -> Reflect** 循环：先从插件市场中搜索可用能力，再规划执行步骤，调用工具或子 Agent，最后根据结果判断是否完成、重试、继续规划或交给人工处理。
 
-```
-用户目标
-  |
-  v
-[Search -> Plan -> Execute -> Reflect] x N 轮
-  |
-  v
-AgentResult
-
-能力来源统一进入 Marketplace：
-
-代码直注册(tool/skill/subagent) / @Plugin Bean / 包扫描 / 文件系统目录
-  |
-  v
-CapabilityDescriptor
-  |
-  +-- MCP Tool
-  +-- Skill
-  +-- Sub-Agent
-```
+<img src="images/readme_1_cn.jpg" width="700" alt="架构图"/>
 
 ## 为什么用 Regnexe
 
@@ -122,10 +103,10 @@ System.out.println(result.getFinalText());          // FINISHED
 [Agent Start   ] R0 Goal: 查询北京今天的天气和空气质量... | maxRounds: 3
 [Search Result ] R1 Found 2 capabilities: get_weather, get_air_quality
 [Plan Result   ] R1 Selected: [get_weather, get_air_quality] | Strategy: SYNTHESIZE | ...
-[TOOL Call     ] R1 get_weather {"city": "Beijing"}
-[TOOL Result   ] R1 get_weather -> 北京：晴，22°C。
-[TOOL Call     ] R1 get_air_quality {"city": "Beijing"}
-[TOOL Result   ] R1 get_air_quality -> 北京：AQI 35，空气质量优。
+[TOOL Call     ] R1 mcp_tool:get_weather {"city": "Beijing"}
+[TOOL Result   ] R1 mcp_tool:get_weather -> 北京：晴，22°C。
+[TOOL Call     ] R1 mcp_tool:get_air_quality {"city": "Beijing"}
+[TOOL Result   ] R1 mcp_tool:get_air_quality -> 北京：AQI 35，空气质量优。
 [Execute Result] R1 SUCCESS | 晴天 22°C，AQI 35，非常适合户外跑步。
 [Reflect Result] R1 FINISH — 两项数据都已获取，目标已完整回答。
 [Agent Done    ] R1 Status: FINISHED | Rounds: 1
@@ -424,6 +405,17 @@ RegnexeAgent agent = regnexeAgentBuilder
 ## 8. 可观测性
 
 Search → Plan → Execute → Reflect 的每一步——以及 Execute 内部的工具调用循环——都会通过你用 `withEventListener(...)` 配置的 `AgentEventListener` 发出一个 `AgentEvent`。`EventType` 给每个外层步骤配了一对 `*_STARTED`/`*_COMPLETED` 事件，加上内层循环的 `TOOL_CALLED`/`TOOL_RESULT`/`LLM_RESPONDED`、按阶段区分的 LLM 钩子（`PLAN_LLM_RESPONDED`、`REFLECT_LLM_RESPONDED`、`SKILL_LLM_RESPONDED`、`AGENT_LLM_RESPONDED`），以及 Token 用量事件（`TOKEN_USAGE`、`CAPABILITY_TOKEN_USAGE`、`TASK_TOKEN_SUMMARY`）。代码见 [`ExampleReadme09ObservabilityTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme09ObservabilityTest.java)。
+
+`TOOL_CALLED`/`TOOL_RESULT` 会用能力注册时的 `CapabilityType`（`mcp_tool`、`skill`、`subagent`）打上 `<类型>:<名称>` 标签；在某个 Skill/Sub-Agent 自身执行过程中发起的工具调用，会再加上 `[<类型>:<名称>] ` 前缀，让嵌套关系一目了然：
+
+```
+[TOOL Call     ] R1 subagent:expense_estimator {"description": "估算上海 3 天出差预算。"}
+[TOOL Call     ] R1 [subagent:expense_estimator] estimate_trip_cost {"city": "Shanghai", "days": 3}
+[TOOL Result   ] R1 [subagent:expense_estimator] estimate_trip_cost -> 上海 3 天出差预估：共 3600 元。
+[TOOL Result   ] R1 subagent:expense_estimator -> 预算总额约 3600 元（约 500 美元）……
+```
+
+没有 `<类型>:` 前缀的工具（如上面的 `estimate_trip_cost`）说明它没有以该名称注册为市场能力——这正是 Sub-Agent *私有* `ownTools` 的预期表现，它们被刻意从不注册。
 
 `ConsoleEventListener`——本文档默认一直在用的——打印到 stdout，适合本地开发和测试：
 

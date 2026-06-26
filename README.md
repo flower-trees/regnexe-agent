@@ -15,26 +15,7 @@
 
 Most LLM integrations stop at a single tool call. Regnexe runs a full **Search → Plan → Execute → Reflect** loop — selecting the right capabilities, replanning across multiple rounds, and adapting until the goal is met or it hands back to you.
 
-```
-User Goal
-    │
-    ▼
-[Search → Plan → Execute → Reflect] × N rounds → AgentResult
-                    │
-                    ▼
-          Plugin Marketplace
-    ┌───────────────────────────────┐
-    │  Loading channels:            │
-    │   code-first (tool/skill/     │
-    │   subagent) · @Plugin bean ·  │
-    │   package scan · file dir     │
-    │               ↓               │
-    │  CapabilityDescriptor         │  ← unified capability API
-    │  ┌─────────┬───────┬────────┐ │
-    │  │MCP Tool │ Skill │SubAgent│ │
-    │  └─────────┴───────┴────────┘ │
-    └───────────────────────────────┘
-```
+<img src="images/readme_1_en.jpg" width="700" alt="Architecture"/>
 
 **What sets it apart:**
 - 🔄 **Multi-round reasoning** — replans and retries, not just one tool call
@@ -106,10 +87,10 @@ No `@EnableXxx`. No XML. `RegnexeAgentBuilder` is auto-configured by Spring Boot
 [Agent Start   ] R0 Goal: Check today's weather and air quality in Beijing... | maxRounds: 3
 [Search Result ] R1 Found 2 capabilities: get_weather, get_air_quality
 [Plan Result   ] R1 Selected: [get_weather, get_air_quality] | Strategy: SYNTHESIZE | ...
-[TOOL Call     ] R1 get_weather {"city": "Beijing"}
-[TOOL Result   ] R1 get_weather -> Beijing: sunny, 22 C.
-[TOOL Call     ] R1 get_air_quality {"city": "Beijing"}
-[TOOL Result   ] R1 get_air_quality -> Beijing: AQI 35, excellent air quality.
+[TOOL Call     ] R1 mcp_tool:get_weather {"city": "Beijing"}
+[TOOL Result   ] R1 mcp_tool:get_weather -> Beijing: sunny, 22 C.
+[TOOL Call     ] R1 mcp_tool:get_air_quality {"city": "Beijing"}
+[TOOL Result   ] R1 mcp_tool:get_air_quality -> Beijing: AQI 35, excellent air quality.
 [Execute Result] R1 SUCCESS | Sunny, 22°C, AQI 35 — great conditions for a run.
 [Reflect Result] R1 FINISH — both readings obtained and the goal is fully answered.
 [Agent Done    ] R1 Status: FINISHED | Rounds: 1
@@ -417,6 +398,17 @@ RegnexeAgent agent = regnexeAgentBuilder
 ## 8. Observability
 
 Every Search → Plan → Execute → Reflect step — and the inner tool-calling loop inside Execute — emits an `AgentEvent` through whichever `AgentEventListener` you configure via `withEventListener(...)`. `EventType` pairs a `*_STARTED`/`*_COMPLETED` event for each outer step, plus inner-loop hooks (`TOOL_CALLED`/`TOOL_RESULT`/`LLM_RESPONDED`), phase-specific LLM hooks (`PLAN_LLM_RESPONDED`, `REFLECT_LLM_RESPONDED`, `SKILL_LLM_RESPONDED`, `AGENT_LLM_RESPONDED`), and token-usage events (`TOKEN_USAGE`, `CAPABILITY_TOKEN_USAGE`, `TASK_TOKEN_SUMMARY`). See [`ExampleReadme09ObservabilityTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme09ObservabilityTest.java).
+
+`TOOL_CALLED`/`TOOL_RESULT` are labeled `<type>:<name>` using the capability's registered `CapabilityType` (`mcp_tool`, `skill`, `subagent`), and a tool call made *inside* a Skill/Sub-Agent's own execution is prefixed `[<type>:<name>] ` to make the nesting visible:
+
+```
+[TOOL Call     ] R1 subagent:expense_estimator {"description": "Estimate a 3-day business trip budget in Shanghai."}
+[TOOL Call     ] R1 [subagent:expense_estimator] estimate_trip_cost {"city": "Shanghai", "days": 3}
+[TOOL Result   ] R1 [subagent:expense_estimator] estimate_trip_cost -> 3-day Shanghai trip estimate: 3600 CNY total.
+[TOOL Result   ] R1 subagent:expense_estimator -> The total estimated budget is 3,600 CNY (~$500 USD)...
+```
+
+A tool with no `<type>:` prefix (like `estimate_trip_cost` above) isn't registered as a marketplace capability under that name — exactly what's expected for a Sub-Agent's *private* `ownTools`, which are deliberately never registered.
 
 `ConsoleEventListener` — the default used throughout this README — prints to stdout, good for local dev and tests:
 
