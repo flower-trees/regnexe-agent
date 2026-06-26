@@ -9,7 +9,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
   <img src="https://img.shields.io/badge/Java-17%2B-orange" alt="Java 17+"/>
   <img src="https://img.shields.io/badge/Spring%20Boot-3.x-green" alt="Spring Boot 3.x"/>
-  <a href="https://github.com/flower-trees/regnexe-py"><img src="https://img.shields.io/badge/Python%20Version-regnexe--py-blue?logo=python&logoColor=white" alt="Python Version"/></a>
+  <a href="https://github.com/flower-trees/regnexe-py"><img src="https://img.shields.io/badge/Python%20Version-regnexe--py-blue?logo=python&amp;logoColor=white" alt="Python Version"/></a>
 </p>
 <p align="center">
   <a href="README_zh.md">简体中文</a> | English
