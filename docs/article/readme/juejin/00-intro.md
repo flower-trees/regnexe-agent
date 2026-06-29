@@ -1,12 +1,12 @@
-# 我用 Java 写了一个能自己规划、执行、反思的 Agent 框架，开源了 🚀
+# Java 写 AI Agent，if-else 伪装够了——我造了个真能"想-干-查"的开源框架
 
-大家好，最近在搞一个开源项目，想分享出来，顺便记录一下踩坑过程——一个 Java / Spring Boot 的 Agent 框架，叫 **Regnexe**。这是系列第一篇，后面打算用 9 篇文章把核心能力点逐一讲完，每篇都带可以直接跑的代码。
+> 仓库：[regnexe-agent](https://github.com/flower-trees/regnexe-agent) | 示例代码全部在 `ExampleReadme01~09Test`，真能跑，不是 PPT 代码。
 
-> 仓库地址：[regnexe-agent](https://github.com/flower-trees/regnexe-agent)，文章对应的示例代码全部在 `ExampleReadme01~09Test` 里，不是 PPT 代码，建议跟着撸一遍。
+---
 
-## 🤔 起因：我受不了"调一次工具"式 Agent 了
+## 先说一件让我很烦的事
 
-写过 Agent 相关功能的同学应该都遇到过这种"伪 Agent"：
+网上 80% 的"Java AI Agent 教程"长这样：
 
 ```java
 String intent = classifyIntent(userInput);
@@ -19,45 +19,73 @@ if ("weather".equals(intent)) {
 }
 ```
 
-意图分类 + if-else + 模型兜底，演示的时候看起来挺智能，用户真问出"帮我查一下成都天气，顺便看看报销条款有没有问题，最后把三天行程排一下"——三个系统、三种能力，这套东西直接崩。
+意图分类 + if-else + 模型兜底。给它起个名叫 "Agent"，做个 Demo 没问题。
 
-不是代码写得不好，是**单次工具调用**这个模型本身扛不住复合任务。我想要的是一个能自己找能力、自己排计划、自己执行、自己检查结果的闭环——这就是 Regnexe 的由来。
+用户真问出"帮我查成都天气，顺便看看报销条款够不够，再把三天行程排一下"——三个系统，三种能力，前后有依赖，这套东西直接崩。
 
-## ⚡ 核心机制：四步闭环
+**问题不是代码写得不好，是模型压根就不在执行循环里。**
+
+---
+
+## Java AI 框架现状：够用，但不够
+
+| 框架 | 定位 | 缺什么 |
+|---|---|---|
+| Spring AI | Spring 生态接入各家模型 | 工具调用有，但没有多轮自主规划 |
+| LangChain4j | LangChain 的 Java 移植 | 链式调用为主，复杂任务需要大量手写逻辑 |
+| 手撸 ReAct | 自己实现 Thought-Action-Observation | 每个项目都在重复造轮子，能力复用难 |
+
+这些方案接入简单，但遇到"多步骤、跨系统、结果需要验证"的任务，都要回到"你来设计主流程"。
+
+**我想要的是：只告诉它目标和工具，让它自己把活干完，干完自己检查。**
+
+---
+
+## Regnexe 的做法：Search → Plan → Execute → Reflect 闭环
 
 ```
 用户目标
-  │
-  ▼
-[Search 找能力 → Plan 排计划 → Execute 真执行 → Reflect 查结果] × N 轮
-  │
-  ▼
+   │
+   ▼
+┌─────────────────────────────────────────┐
+│  Search   找出跟目标相关的能力          │
+│     ↓                                   │
+│  Plan     决定调用顺序和组合方式        │  × N 轮
+│     ↓                                   │
+│  Execute  真发起调用（工具/Skill/Agent）│
+│     ↓                                   │
+│  Reflect  判断任务是否真完成了          │
+└─────────────────────────────────────────┘
+   │
+   ▼
 AgentResult
 ```
 
-- 🔍 **Search**：从插件市场挑出跟目标相关的能力，不会把几十个工具全塞进 Prompt
-- 📝 **Plan**：决定调用哪些能力、先后顺序、结果要不要综合
-- ⚙️ **Execute**：真正发起调用——可能是工具，也可能是 Skill / Sub-Agent
-- 🔁 **Reflect**：检查任务是不是真做完了，没做完就接着下一轮
+四步是一轮。没完成，接着下一轮。Reflect 判断"完了"，整个循环才退出。
 
-四步拼起来，"Agent"才从"答一次题"变成"把活干完"。
+这不是我发明的——这是 Self-Refine / ReAct / CAMEL 等研究里反复出现的"Agent 应该是个循环"的结论。Regnexe 做的是把它落到 Java / Spring Boot 生产环境里。
 
-## 🏷️ 划重点：这玩意儿严格来说不是 SDK，是 Harness
+---
 
-很多人把"接大模型"等同于"调个 SDK"——传个 Prompt，拿个回复，结束。Regnexe 想干的事更重一点，业内对这类框架有个专门叫法：**Agent Harness**。仓库 `pom.xml` 里写的就是：
+## 它和 SDK 的本质区别
 
-```text
-Enterprise-grade Agent Harness — Search-Plan-Execute-Reflect
+很多人把"接大模型"等同于"调个 SDK"——传 Prompt，拿回复，结束。
+
+Regnexe 是 **Agent Harness**，不是 SDK：
+
+```
+SDK 模式：  你 → 调 → 模型/工具         （你是主流程）
+Harness 模式：你 → 描述目标和能力 → 框架主导 Search-Plan-Execute-Reflect
+                                         （框架是执行引擎）
 ```
 
-SDK 是"你调用它"，Harness 是"它驱动你"：
+`pom.xml` 里写的是 `Enterprise-grade Agent Harness`，这个词是刻意选的。你不写主流程，你只注册能力、声明目标，框架负责把任务从头跑到尾。
 
-- SDK 模式：你写主流程，需要的时候调一下模型/工具
-- Harness 模式：你只描述目标和能力，整个 Search→Plan→Execute→Reflect 的执行权交给框架，它负责把任务从头跑到尾
+---
 
-后面 9 篇讲的工具注册、Skill/Sub-Agent、插件市场、记忆分层、暂停恢复、可观测性，都是这套 harness 为了"把任务跑完"长出来的能力，不是东拼西凑的功能点。
+## 5 分钟上手
 
-## 🛠️ 上手最简版（建议跟着抄一遍）
+**1. 引依赖**
 
 ```xml
 <dependency>
@@ -67,12 +95,16 @@ SDK 是"你调用它"，Harness 是"它驱动你"：
 </dependency>
 ```
 
+**2. 配模型**
+
 ```yaml
 # application.yml
 models:
   aliyun:
     chat-key: ${ALIYUN_KEY}
 ```
+
+**3. 跑起来**
 
 ```java
 Tool weatherTool = Tool.builder()
@@ -88,30 +120,37 @@ AgentResult result = regnexeAgentBuilder
     .build()
     .execute("Check today's weather in Beijing. Is it good for running?");
 
-System.out.println(result.getFinalText());   // FINISHED：北京今天晴，22℃，适合跑步
+System.out.println(result.getFinalText());
+// → 北京今天晴，22℃，空气优，适合跑步。
 ```
 
-Spring Boot 自动装配，`RegnexeAgentBuilder` 注入即用，不用 `@EnableXxx`。这几行背后，Search/Plan/Execute/Reflect 已经完整跑了一轮——下一篇换成两个工具，把控制台日志展开给你看 Planner 是怎么"思考"的。
+Spring Boot 自动装配，`RegnexeAgentBuilder` 注入即用，不用 `@EnableXxx`。
 
-## 📚 系列大纲
-
-| # | 主题 |
-|---|---|
-| 01 | [withTool 极简接入，不建类不写注解](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/01-multi-tool.md) |
-| 02 | [Skill 和 Sub-Agent 怎么选](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/02-skill.md) |
-| 03 | [子任务用便宜模型，靠 Sub-Agent](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/03-subagent.md) |
-| 04 | [一个注解打包 4 种能力](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/04-plugin-annotation.md) |
-| 05 | [插件加载的四种姿势](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/05-plugin-packaging.md) |
-| 06 | [能力市场换成数据库，一个接口的事](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/06-marketplace.md) |
-| 07 | [Agent 记忆为什么要拆三层](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/07-three-layer-memory.md) |
-| 08 | [长任务说停就停说续就续](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/08-pause-resume.md) |
-| 09 | [Agent 是黑盒？接个监听器就能看穿](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/09-observability.md) |
-
-每篇代码都能在仓库原样找到，真能跑，不是讲概念硬凑的示例。
+这几行背后，Search / Plan / Execute / Reflect 已经完整跑了一轮。下一篇把控制台日志展开，你能看到 Planner 是怎么"思考"的。
 
 ---
 
-如果你也受够了"调一次工具就叫 Agent"，欢迎去仓库点个 ⭐，关注我追更后面 9 篇 🙌
+## 后面 9 篇讲什么
 
-📌 项目地址：https://github.com/flower-trees/regnexe-agent
-📌 下一篇：[01. withTool 极简接入](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/01-multi-tool.md)
+这个系列的结构是"从简单到复杂，每篇解决一个真实问题"：
+
+| # | 解决什么问题 | 关键机制 |
+|---|---|---|
+| [01](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/01-multi-tool.md) | 多工具时 Planner 怎么选？日志里能看到决策过程吗？ | withTool / 控制台事件 |
+| [02](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/02-skill.md) | 一个复杂子任务，交给工具还是交给 Skill？ | Skill 的提示词封装 |
+| [03](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/03-subagent.md) | 贵的模型做规划，便宜的模型干执行，怎么拆？ | Sub-Agent 模型隔离 |
+| [04](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/04-plugin-annotation.md) | 一个类里有 4 种能力，能不能一个注解全注册？ | @Plugin / @AgentTool |
+| [05](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/05-plugin-packaging.md) | 能力包打成 jar，部署时热插拔，怎么做？ | 插件打包四种姿势 |
+| [06](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/06-marketplace.md) | 能力市场从内存换成数据库，要改多少代码？ | Marketplace 接口替换 |
+| [07](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/07-three-layer-memory.md) | 同一个用户多轮对话，上下文怎么管？ | 三层记忆模型 |
+| [08](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/08-pause-resume.md) | 长任务跑到一半，用户喊停，能接着继续吗？ | pause / resume |
+| [09](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/09-observability.md) | Agent 答错了，怎么知道是哪一步出的问题？ | 事件监听器 |
+
+每篇代码都在仓库里原样能跑，序号就是示例文件序号。
+
+---
+
+如果你也受够了"意图分类 + if-else = Agent"，欢迎去仓库点个 ⭐，追后面 9 篇 👇
+
+📌 项目地址：https://github.com/flower-trees/regnexe-agent  
+📌 下一篇：[01. 多工具场景下，Planner 怎么选工具？控制台日志全程可见](https://github.com/flower-trees/regnexe-agent/blob/master/docs/article/readme/juejin/01-multi-tool.md)
