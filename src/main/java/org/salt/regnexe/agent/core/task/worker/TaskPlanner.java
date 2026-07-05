@@ -129,23 +129,36 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
         boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
 
-        BaseChatModel llm = llmProvider.provide(modelSpec);
         String taskId = state.getTaskId();
         int round = state.getCurrentRound();
-        FlowInstance flow = buildFlow(chainActor, llm,
-                text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
         String candidateNames = candidates == null ? "" : candidates.stream()
                 .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
         listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
                 "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
 
-        ChatPromptValue prompt = buildChatPrompt(state, candidates, sessionHistory, resumeMode);
-        ChatGeneration result = chainActor.invoke(flow, prompt);
+        PlanOutput plan;
+        if (candidates == null || candidates.isEmpty()) {
+            // No capabilities registered — skip the LLM planning call entirely.
+            // The executor will answer the goal directly via its own LLM call.
+            plan = new PlanOutput();
+            plan.setSelectedCapabilityIds(List.of());
+            plan.setNarrative("No tools available. Provide a direct answer to the goal.");
+            plan.setResultStrategy(ResultStrategy.SYNTHESIZE);
+            plan.setFinalAnswerRequirements(List.of());
+            normalizePlan(plan);
+        } else {
+            BaseChatModel llm = llmProvider.provide(modelSpec);
+            FlowInstance flow = buildFlow(chainActor, llm,
+                    text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
-        PlanOutput plan = parsePlan(result.getText());
-        normalizePlan(plan);
-        expandSelectedAllowedTools(plan, candidates);
+            ChatPromptValue prompt = buildChatPrompt(state, candidates, sessionHistory, resumeMode);
+            ChatGeneration result = chainActor.invoke(flow, prompt);
+
+            plan = parsePlan(result.getText());
+            normalizePlan(plan);
+            expandSelectedAllowedTools(plan, candidates);
+        }
 
         bus.putTransmit(ContextBusKeys.PLAN_NARRATIVE, plan.getNarrative());
         bus.putTransmit(ContextBusKeys.SELECTED_CAPS, plan.getSelectedCapabilityIds());
