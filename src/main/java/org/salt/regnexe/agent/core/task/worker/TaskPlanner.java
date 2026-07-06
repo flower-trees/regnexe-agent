@@ -137,9 +137,12 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
                 "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
 
+        boolean hasCandidates = candidates != null && !candidates.isEmpty();
+        boolean hasHistory = sessionHistory != null && !sessionHistory.isEmpty();
+
         PlanOutput plan;
-        if (candidates == null || candidates.isEmpty()) {
-            // No capabilities registered — skip the LLM planning call entirely.
+        if (!hasCandidates) {
+            // No capabilities — skip the LLM planning call entirely.
             // The executor will answer the goal directly via its own LLM call.
             plan = new PlanOutput();
             plan.setSelectedCapabilityIds(List.of());
@@ -158,6 +161,12 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             plan = parsePlan(result.getText());
             normalizePlan(plan);
             expandSelectedAllowedTools(plan, candidates);
+        }
+
+        // Append session history to narrative so the executor LLM sees conversation
+        // context directly, regardless of whether the planner LLM was called.
+        if (hasHistory) {
+            plan.setNarrative(plan.getNarrative() + formatHistoryForNarrative(sessionHistory));
         }
 
         bus.putTransmit(ContextBusKeys.PLAN_NARRATIVE, plan.getNarrative());
@@ -335,6 +344,23 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             return "";
         }
         return " | allowedTools: " + String.join(", ", candidate.getAllowedTools());
+    }
+
+    private String formatHistoryForNarrative(List<HistoryInfos> sessionHistory) {
+        StringBuilder sb = new StringBuilder("\n\nConversation history:\n");
+        for (HistoryInfos h : sessionHistory) {
+            if (h.getType() == HistoryInfos.Type.SUMMARY) {
+                for (BaseMessage msg : h.getMessages()) {
+                    sb.append(msg.getContent()).append("\n");
+                }
+            } else {
+                for (BaseMessage msg : h.getMessages()) {
+                    String role = MessageType.HUMAN.equalsV(msg.getRole()) ? "Human" : "Assistant";
+                    sb.append(role).append(": ").append(msg.getContent()).append("\n");
+                }
+            }
+        }
+        return sb.toString();
     }
 
     private String extractJson(String text) {
