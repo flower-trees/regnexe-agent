@@ -30,7 +30,10 @@ import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
+import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
+import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
+import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.llm.BaseChatModel;
@@ -114,14 +117,19 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         listener.dispatch(AgentEvent.of(taskId, roundNum, EventType.REFLECTION_STARTED,
                 execText != null ? execText : "(no execution output)"));
 
-        String userPrompt = buildPrompt(state, execText);
-        ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
+        // Pre-LLM guard: catch structurally incomplete rounds before the LLM can hallucinate completion.
+        RoundRecord roundRecord = currentRound(state);
+        ReflectionDecision decision = evaluateGuardRules(roundRecord, state);
+        if (decision != null) {
+            log.warn("Round {}: guard rule forced {} — {}", roundNum, decision.getAction(), decision.getReason());
+        } else {
+            String userPrompt = buildPrompt(state, execText, roundRecord);
+            ChatGeneration result = chainActor.invoke(flow, Map.of("prompt", userPrompt));
+            decision = parseDecision(result.getText());
+        }
 
-        ReflectionDecision decision = parseDecision(result.getText());
-
-        RoundRecord round = currentRound(state);
-        round.setReflection(decision);
-        round.setEndedAt(System.currentTimeMillis());
+        roundRecord.setReflection(decision);
+        roundRecord.setEndedAt(System.currentTimeMillis());
 
         switch (decision.getAction()) {
             case FINISH   -> state.setStatus(TaskStatus.FINISHED);
@@ -155,11 +163,10 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
                 .build();
     }
 
-    private String buildPrompt(TaskExecutionState state, String execText) {
+    private String buildPrompt(TaskExecutionState state, String execText, RoundRecord round) {
         StringBuilder sb = new StringBuilder();
         sb.append("Goal: ").append(state.getRequest().getGoal()).append("\n\n");
 
-        RoundRecord round = currentRound(state);
         if (round.getPlan() != null) {
             sb.append("Plan narrative: ").append(round.getPlan().getNarrative()).append("\n\n");
         }
@@ -173,6 +180,11 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             sb.append("\n");
         }
 
+        // Inject factual tool execution count so the LLM cannot hallucinate completion from zero executions.
+        ExecutionOutput exec = round.getExecutionResult();
+        int toolCount = (exec != null && exec.getToolExecutions() != null) ? exec.getToolExecutions().size() : 0;
+        sb.append("Tools executed this round: ").append(toolCount).append("\n\n");
+
         sb.append("Execution result:\n");
         sb.append(execText != null ? execText : "(no output)").append("\n\n");
 
@@ -183,6 +195,39 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Hard-coded guard rules evaluated before the LLM is called.
+     * Returns a forced decision if a structural violation is detected; null means proceed normally.
+     *
+     * Rule: capabilities were selected but zero tools ran → cannot be FINISH.
+     */
+    private ReflectionDecision evaluateGuardRules(RoundRecord round, TaskExecutionState state) {
+        PlanOutput plan = round.getPlan();
+        ExecutionOutput exec = round.getExecutionResult();
+
+        boolean capsSelected = plan != null
+                && plan.getSelectedCapabilityIds() != null
+                && !plan.getSelectedCapabilityIds().isEmpty();
+        boolean noToolsRan = exec == null
+                || exec.getToolExecutions() == null
+                || exec.getToolExecutions().isEmpty();
+
+        if (capsSelected && noToolsRan) {
+            int capsCount = plan.getSelectedCapabilityIds().size();
+            ReflectionDecision decision = new ReflectionDecision();
+            decision.setAction(ReflectionAction.CONTINUE);
+            decision.setReason("Guard: " + capsCount + " capabilities selected but no tools executed this round");
+            ReflectionHint hint = new ReflectionHint();
+            hint.setPlanAdjustment(
+                    "No tools ran despite " + capsCount + " capabilities being selected. "
+                    + "Retry the plan — if tool confirmations were cancelled, accept them.");
+            hint.setReason("zero tool executions");
+            decision.setHintForNext(hint);
+            return decision;
+        }
+        return null;
     }
 
     private ReflectionDecision parseDecision(String text) {

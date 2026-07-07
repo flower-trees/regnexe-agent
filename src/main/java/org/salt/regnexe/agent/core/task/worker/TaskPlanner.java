@@ -94,6 +94,14 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - FINAL ANSWER REQUIREMENTS: list the concrete user-facing items the executor's final answer \
               must include. For SYNTHESIZE, include every required deliverable. For RETURN_LAST, include \
               the single complete deliverable expected from the final capability.
+            - ITERATIONS HINT: Estimate how many executor iterations this plan will need and set \
+              iterationsHint accordingly. Use these per-operation costs as a guide:
+              * Each file read (read_file, list_files, search_files): ~2 iterations
+              * Each file write or edit (write_file, edit_file, with confirmation): ~3 iterations
+              * Each bash execution (with possible confirmation): ~2 iterations
+              * Each sub-agent or skill call: ~5 iterations
+              Sum the costs for all planned operations, then add a 25%% buffer. \
+              If the total is <= the default (20), omit the field or set it to null.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
@@ -106,11 +114,19 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
               },
               "resultStrategy": "<use exactly RETURN_LAST or SYNTHESIZE>",
               "finalAnswerRequirements": ["<required item 1>", "<required item 2>"],
-              "reasoning": "<why you chose these capabilities>"
+              "reasoning": "<why you chose these capabilities>",
+              "iterationsHint": <integer or null>
             }
             """;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final int MAX_PLAN_RETRIES = 2;
+    private static final int MAX_SAFE_ITERATIONS = 200;
+    private static final String PARSE_ERROR_CORRECTION =
+            "[PARSE ERROR] Your previous response was not valid JSON. " +
+            "Do NOT output XML, markdown, tool-call syntax, or any other format. " +
+            "Output ONLY a plain JSON object matching the required schema. No ```json fences.";
 
     @Override
     public Object process(Object input) {
@@ -155,10 +171,28 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             FlowInstance flow = buildFlow(chainActor, llm,
                     text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
-            ChatPromptValue prompt = buildChatPrompt(state, candidates, sessionHistory, resumeMode);
-            ChatGeneration result = chainActor.invoke(flow, prompt);
-
-            plan = parsePlan(result.getText());
+            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, sessionHistory, resumeMode);
+            List<BaseMessage> messages = new ArrayList<>(basePrompt.getMessages());
+            plan = null;
+            String lastRaw = null;
+            for (int attempt = 0; attempt <= MAX_PLAN_RETRIES; attempt++) {
+                ChatGeneration gen = chainActor.invoke(flow,
+                        ChatPromptValue.builder().messages(messages).build());
+                lastRaw = gen.getText();
+                plan = tryParsePlan(lastRaw);
+                if (plan != null) break;
+                if (attempt < MAX_PLAN_RETRIES) {
+                    log.warn("Round {}: plan parse failed on attempt {}/{}, retrying",
+                            round, attempt + 1, MAX_PLAN_RETRIES);
+                    messages = new ArrayList<>(messages);
+                    messages.add(BaseMessage.fromMessage(MessageType.AI.getCode(), lastRaw));
+                    messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), PARSE_ERROR_CORRECTION));
+                }
+            }
+            if (plan == null) {
+                log.warn("Round {}: plan parse failed after {} retries, using recovery plan", round, MAX_PLAN_RETRIES);
+                plan = recoverPlan(state, candidates, lastRaw);
+            }
             normalizePlan(plan);
             expandSelectedAllowedTools(plan, candidates);
         }
@@ -172,6 +206,17 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         bus.putTransmit(ContextBusKeys.PLAN_NARRATIVE, plan.getNarrative());
         bus.putTransmit(ContextBusKeys.SELECTED_CAPS, plan.getSelectedCapabilityIds());
         bus.putTransmit(ContextBusKeys.CAPABILITY_INPUT_DESCS, plan.getCapabilityInputDescriptions());
+
+        // Apply iterationsHint: override the global maxAgentIterations for this round if the
+        // plan estimates more iterations are needed. Never exceed MAX_SAFE_ITERATIONS.
+        if (plan.getIterationsHint() != null && plan.getIterationsHint() > 0) {
+            Integer current = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
+            int hint = Math.min(plan.getIterationsHint(), MAX_SAFE_ITERATIONS);
+            if (current == null || hint > current) {
+                bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS, hint);
+                log.debug("Round {}: iterationsHint={} applied (was {})", round, hint, current);
+            }
+        }
 
         currentRound(state).setPlan(plan);
         state.setUpdatedAt(System.currentTimeMillis());
@@ -293,7 +338,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         return ChatPromptValue.builder().messages(messages).build();
     }
 
-    private PlanOutput parsePlan(String text) {
+    private PlanOutput tryParsePlan(String text) {
         String json = extractJson(text);
         try {
             return MAPPER.readValue(json, PlanOutput.class);
@@ -301,14 +346,45 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             try {
                 return MAPPER.readValue(repairJson(json), PlanOutput.class);
             } catch (Exception e) {
-                log.warn("Failed to parse PlanOutput, using raw text as narrative: {}", first.getMessage());
-                PlanOutput fallback = new PlanOutput();
-                fallback.setNarrative(text);
-                fallback.setSelectedCapabilityIds(List.of());
-                fallback.setReasoning("parse error");
-                return fallback;
+                log.debug("Plan parse attempt failed: {}", first.getMessage());
+                return null;
             }
         }
+    }
+
+    private PlanOutput recoverPlan(TaskExecutionState state, List<CapabilityCandidate> candidates, String rawText) {
+        // Level 1: reuse last successful plan from a previous round
+        List<RoundRecord> rounds = state.getRounds();
+        if (rounds.size() >= 2) {
+            for (int i = rounds.size() - 2; i >= 0; i--) {
+                PlanOutput prev = rounds.get(i).getPlan();
+                if (prev != null && prev.getSelectedCapabilityIds() != null
+                        && !prev.getSelectedCapabilityIds().isEmpty()) {
+                    PlanOutput recovery = new PlanOutput();
+                    recovery.setNarrative("[Recovery: reusing plan from round " + (i + 1) + "]\n" + prev.getNarrative());
+                    recovery.setSelectedCapabilityIds(new ArrayList<>(prev.getSelectedCapabilityIds()));
+                    recovery.setCapabilityInputDescriptions(prev.getCapabilityInputDescriptions());
+                    recovery.setResultStrategy(prev.getResultStrategy() != null
+                            ? prev.getResultStrategy() : ResultStrategy.SYNTHESIZE);
+                    recovery.setFinalAnswerRequirements(prev.getFinalAnswerRequirements());
+                    recovery.setReasoning("recovered from round " + (i + 1) + " after plan parse failure");
+                    log.warn("Plan recovery: reusing round-{} plan", i + 1);
+                    return recovery;
+                }
+            }
+        }
+        // Level 2: minimal default — select all candidates, direct synthesis
+        PlanOutput minimal = new PlanOutput();
+        minimal.setNarrative("Plan parse failed. Use all available tools to fulfill the goal: "
+                + state.getRequest().getGoal());
+        List<String> allIds = candidates == null ? List.of() :
+                candidates.stream().map(CapabilityCandidate::getCapabilityId)
+                        .collect(java.util.stream.Collectors.toList());
+        minimal.setSelectedCapabilityIds(allIds);
+        minimal.setResultStrategy(ResultStrategy.SYNTHESIZE);
+        minimal.setFinalAnswerRequirements(List.of());
+        minimal.setReasoning("minimal recovery: all candidates selected after persistent parse failure");
+        return minimal;
     }
 
     private void normalizePlan(PlanOutput plan) {

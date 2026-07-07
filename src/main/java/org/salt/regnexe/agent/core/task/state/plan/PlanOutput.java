@@ -57,4 +57,11 @@ public class PlanOutput {
      * Planner's reasoning, for auditing
      */
     private String reasoning;
+
+    /**
+     * Optional: estimated executor iterations needed for this plan.
+     * When set, overrides the global maxAgentIterations for this round.
+     * Capped at MAX_SAFE_ITERATIONS in TaskPlanner before being applied.
+     */
+    private Integer iterationsHint;
 }
