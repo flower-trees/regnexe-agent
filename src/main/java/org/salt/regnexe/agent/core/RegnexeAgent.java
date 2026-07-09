@@ -48,6 +48,7 @@ import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
 import org.salt.jlangchain.core.message.MessageType;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -212,10 +213,20 @@ public class RegnexeAgent {
         try {
             flowEngine.execute(flowInstance, state.getRequest(), transmitMap);
         } catch (Exception e) {
-            log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
-            state.setStatus(TaskStatus.FAILED);
-            taskStore.save(state);
-            throw e;
+            if (isTransientIOException(e)) {
+                // A network blip (e.g. LLM call SocketTimeoutException) shouldn't strand
+                // already-completed rounds in a dead FAILED state. PAUSED keeps the task
+                // eligible for listResumable()/--resume so real work already done (files
+                // already written to disk) isn't lost.
+                log.warn("RegnexeAgent loop paused after transient I/O error: {}", e.getMessage());
+                state.setStatus(TaskStatus.PAUSED);
+                taskStore.save(state);
+            } else {
+                log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
+                state.setStatus(TaskStatus.FAILED);
+                taskStore.save(state);
+                throw e;
+            }
         }
 
         if (state.getStatus() == TaskStatus.RUNNING) {
@@ -248,6 +259,16 @@ public class RegnexeAgent {
                 .finalText(finalText)
                 .state(state)
                 .build();
+    }
+
+    /** True if an IOException (e.g. SocketTimeoutException from an LLM call) appears anywhere in the cause chain. */
+    private boolean isTransientIOException(Throwable e) {
+        for (Throwable cur = e; cur != null; cur = cur.getCause()) {
+            if (cur instanceof IOException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Map<String, Object> buildTransmitMap(TaskExecutionState state,

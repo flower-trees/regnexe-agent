@@ -114,7 +114,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
               },
               "resultStrategy": "<use exactly RETURN_LAST or SYNTHESIZE>",
               "finalAnswerRequirements": ["<required item 1>", "<required item 2>"],
-              "reasoning": "<why you chose these capabilities>",
               "iterationsHint": <integer or null>
             }
             """;
@@ -367,7 +366,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                     recovery.setResultStrategy(prev.getResultStrategy() != null
                             ? prev.getResultStrategy() : ResultStrategy.SYNTHESIZE);
                     recovery.setFinalAnswerRequirements(prev.getFinalAnswerRequirements());
-                    recovery.setReasoning("recovered from round " + (i + 1) + " after plan parse failure");
                     log.warn("Plan recovery: reusing round-{} plan", i + 1);
                     return recovery;
                 }
@@ -383,7 +381,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         minimal.setSelectedCapabilityIds(allIds);
         minimal.setResultStrategy(ResultStrategy.SYNTHESIZE);
         minimal.setFinalAnswerRequirements(List.of());
-        minimal.setReasoning("minimal recovery: all candidates selected after persistent parse failure");
         return minimal;
     }
 
