@@ -153,7 +153,12 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
 
         boolean hasCandidates = candidates != null && !candidates.isEmpty();
-        boolean hasHistory = sessionHistory != null && !sessionHistory.isEmpty();
+        // Session history (turns from before this task started) is only informative on the
+        // first round. From round 2 onward, lastHint()/"Previous round summary" in
+        // buildChatPrompt already carry the task's own progress, so re-sending the same
+        // pre-task history every round is pure repeated prefill cost with no new information.
+        boolean isFirstRound = round == 1;
+        boolean hasHistory = isFirstRound && sessionHistory != null && !sessionHistory.isEmpty();
 
         PlanOutput plan;
         if (!hasCandidates) {
@@ -170,7 +175,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             FlowInstance flow = buildFlow(chainActor, llm,
                     text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
-            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, sessionHistory, resumeMode);
+            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, resumeMode);
             List<BaseMessage> messages = new ArrayList<>(basePrompt.getMessages());
             plan = null;
             String lastRaw = null;
