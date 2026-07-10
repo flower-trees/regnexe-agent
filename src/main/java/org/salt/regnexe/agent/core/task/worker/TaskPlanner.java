@@ -62,6 +62,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             Rules:
             - Select only capabilities that are genuinely relevant to the goal.
             - The narrative should be clear, actionable instructions for the executor.
+            - NARRATIVE LENGTH: keep narrative short — a few sentences covering sequence/strategy only \
+              (what to do, and in what order). Do NOT restate capability input data (that belongs in \
+              capabilityInputDescriptions) or the final-answer checklist (that belongs in \
+              finalAnswerRequirements).
             - CRITICAL: every capability name you mention in the narrative MUST also appear in selectedCapabilityIds.
             - TOOL DEPENDENCIES: If a selected SKILL or SUB_AGENT lists allowedTools, you MUST also include each \
               allowed tool id in selectedCapabilityIds. These tools are inherited dependencies for that capability; \
@@ -171,7 +175,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             plan.setFinalAnswerRequirements(List.of());
             normalizePlan(plan);
         } else {
-            BaseChatModel llm = llmProvider.provide(modelSpec);
+            // withJsonMode(): Plan output is parsed as structured JSON (PlanOutput), so ask the
+            // vendor to constrain generation to valid JSON syntax where supported. This does NOT
+            // affect Execute — CapabilityExecutor provides its own llm instance for tool-calling.
+            BaseChatModel llm = llmProvider.provide(modelSpec).withJsonMode();
             FlowInstance flow = buildFlow(chainActor, llm,
                     text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 

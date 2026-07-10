@@ -108,7 +108,8 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             execText = state.getLastToolResult();
         }
 
-        BaseChatModel llm = llmProvider.provide(modelSpec);
+        // withJsonMode(): ReflectionDecision is parsed as structured JSON.
+        BaseChatModel llm = llmProvider.provide(modelSpec).withJsonMode();
         String taskId = state.getTaskId();
         int roundNum = state.getCurrentRound();
         FlowInstance flow = buildFlow(chainActor, llm,
@@ -167,18 +168,11 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         StringBuilder sb = new StringBuilder();
         sb.append("Goal: ").append(state.getRequest().getGoal()).append("\n\n");
 
-        if (round.getPlan() != null) {
-            sb.append("Plan narrative: ").append(round.getPlan().getNarrative()).append("\n\n");
-        }
-
-        if (round.getPlan() != null
-                && round.getPlan().getCapabilityInputDescriptions() != null
-                && !round.getPlan().getCapabilityInputDescriptions().isEmpty()) {
-            sb.append("Capability input descriptions used this round:\n");
-            round.getPlan().getCapabilityInputDescriptions()
-                 .forEach((k, v) -> sb.append("- ").append(k).append(": ").append(v).append("\n"));
-            sb.append("\n");
-        }
+        // Deliberately NOT re-sending plan.narrative/capabilityInputDescriptions here: Reflector
+        // judges completion from what actually happened (tool count + execution result), not from
+        // what was planned, and those fields (capabilityInputDescriptions especially, which can
+        // contain verbatim-materialized goal/session data) are already sent once to the Planner's
+        // own output and once to CapabilityExecutor — a third copy here added cost with no signal.
 
         // Inject factual tool execution count so the LLM cannot hallucinate completion from zero executions.
         ExecutionOutput exec = round.getExecutionResult();
