@@ -157,18 +157,18 @@ public class DefaultPluginManager implements PluginManager {
     }
 
     private void loadPlugin(Path pluginDir, Marketplace marketplace) {
-        Path manifestPath = pluginDir.resolve("plugin.yaml");
-        if (!Files.exists(manifestPath)) {
-            log.debug("Skipping directory (no plugin.yaml): {}", pluginDir);
+        Map<String, Object> manifest = loadManifest(pluginDir);
+        if (manifest == null) {
+            loadFlatSkillPlugin(pluginDir, marketplace);
             return;
         }
 
-        Map<String, Object> manifest = parseYaml(manifestPath);
         String pluginId  = getString(manifest, "pluginId",     pluginDir.getFileName().toString());
         String name      = getString(manifest, "name",         pluginId);
         String version   = getString(manifest, "version",      "1.0");
         String desc      = getString(manifest, "description",  "");
-        List<String> tags = getStringList(manifest, "tags");
+        // Claude Code plugin.json uses "keywords"; our native plugin.yaml uses "tags" — accept either.
+        List<String> tags = firstNonEmpty(getStringList(manifest, "tags"), getStringList(manifest, "keywords"));
 
         List<CapabilityDescriptor> caps = new ArrayList<>();
         caps.addAll(loadTools(pluginId, pluginDir));
@@ -180,12 +180,82 @@ public class DefaultPluginManager implements PluginManager {
             return;
         }
 
-        marketplace.install(PluginDescriptor.builder()
-                .pluginId(pluginId).version(version)
-                .name(name).description(desc).tags(tags)
-                .capabilities(caps)
-                .build());
-        log.info("Installed plugin '{}' with {} capabilities", pluginId, caps.size());
+        try {
+            marketplace.install(PluginDescriptor.builder()
+                    .pluginId(pluginId).version(version)
+                    .name(name).description(desc).tags(tags)
+                    .capabilities(caps)
+                    .build());
+            log.info("Installed plugin '{}' with {} capabilities", pluginId, caps.size());
+        } catch (IllegalStateException e) {
+            // Directories are scanned in the caller-supplied order, so the first plugin/capability
+            // id registered wins — e.g. addDirectory(projectDir, userDir) gives project-level plugins
+            // priority over identically-named user-level ones instead of crashing the whole load.
+            log.warn("Skipping plugin '{}' from {}: {}", pluginId, pluginDir, e.getMessage());
+        }
+    }
+
+    /**
+     * Fallback for a scanned directory with no plugin.yaml/.claude-plugin manifest: if it
+     * directly contains a SKILL.md, treat the whole directory as a single-skill plugin
+     * (pluginId = directory name), no manifest required.
+     *
+     * <p>This is Claude Code's flat "personal/project skill" layout ({@code .claude/skills/<name>/
+     * SKILL.md}) — distinct from the nested marketplace-plugin layout ({@code .claude-plugin/
+     * plugin.json} + {@code skills/<name>/SKILL.md}) the manifest branch handles. It's also
+     * exactly what skill-creator itself produces when asked to create a standalone skill
+     * (it writes {@code <name>/SKILL.md} directly, no {@code skills/} nesting, no manifest) —
+     * without this fallback, anything skill-creator builds is invisible to the marketplace scan.
+     */
+    private void loadFlatSkillPlugin(Path pluginDir, Marketplace marketplace) {
+        if (!Files.exists(pluginDir.resolve("SKILL.md"))) {
+            log.debug("Skipping directory (no manifest, no SKILL.md): {}", pluginDir);
+            return;
+        }
+        String pluginId = pluginDir.getFileName().toString();
+        try {
+            SkillConfig config = FileSystemSkillConfigLoader.fromPath(pluginDir);
+            CapabilityDescriptor cap = CapabilityDescriptor.builder()
+                    .capabilityId(pluginId + "." + config.getName())
+                    .pluginId(pluginId).type(CapabilityType.SKILL)
+                    .skillConfig(config)
+                    .build();
+            marketplace.install(PluginDescriptor.builder()
+                    .pluginId(pluginId).version("1.0")
+                    .name(config.getName()).description(config.getDescription())
+                    .tags(List.of())
+                    .capabilities(List.of(cap))
+                    .build());
+            log.info("Installed flat skill '{}' from {}", config.getName(), pluginDir);
+        } catch (IllegalStateException e) {
+            log.warn("Skipping flat skill '{}' from {}: {}", pluginId, pluginDir, e.getMessage());
+        } catch (Exception e) {
+            log.warn("Failed to load flat skill from {}: {}", pluginDir, e.getMessage());
+        }
+    }
+
+    /**
+     * Manifest lookup order: {@code plugin.yaml} (regnexe-native) takes priority over
+     * {@code .claude-plugin/plugin.json} (Claude Code plugin manifest). Returns null when
+     * neither is present, so the caller skips the directory.
+     *
+     * <p>plugin.json is valid YAML (YAML is a JSON superset), so it's parsed with the same
+     * SnakeYAML reader as plugin.yaml — no extra JSON dependency needed.
+     */
+    private Map<String, Object> loadManifest(Path pluginDir) {
+        Path nativeManifest = pluginDir.resolve("plugin.yaml");
+        if (Files.exists(nativeManifest)) {
+            return parseYaml(nativeManifest);
+        }
+        Path claudeManifest = pluginDir.resolve(".claude-plugin").resolve("plugin.json");
+        if (Files.exists(claudeManifest)) {
+            return parseYaml(claudeManifest);
+        }
+        return null;
+    }
+
+    private List<String> firstNonEmpty(List<String> a, List<String> b) {
+        return (a == null || a.isEmpty()) ? b : a;
     }
 
     private List<CapabilityDescriptor> loadTools(String pluginId, Path pluginDir) {
@@ -215,7 +285,17 @@ public class DefaultPluginManager implements PluginManager {
 
                      try {
                          String content = Files.readString(scriptFile);
-                         ScriptDef def = ScriptDef.builder().name(toolName).type(ext).content(content).build();
+                         if (!ScriptTool.hasEntrypoint(ext, content)) {
+                             log.debug("Skipping library-only script (no entrypoint): {}", filename);
+                             return;
+                         }
+                         // sourcePath/workDir: run in place (plugin root as cwd) instead of an
+                         // isolated temp copy, so relative imports/sibling-file lookups resolve
+                         // — same fix as FileSystemSkillConfigLoader.loadScripts() (j-langchain).
+                         ScriptDef def = ScriptDef.builder().name(toolName).type(ext).content(content)
+                                 .sourcePath(scriptFile.toAbsolutePath().toString())
+                                 .workDir(pluginDir.toAbsolutePath().toString())
+                                 .build();
                          Tool base = ScriptTool.from(def);
                          Tool tool = Tool.builder()
                                  .name(toolName).description(toolDesc).params(toolParams)

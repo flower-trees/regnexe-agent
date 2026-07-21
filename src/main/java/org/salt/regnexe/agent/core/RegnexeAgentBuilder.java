@@ -189,6 +189,7 @@ public class RegnexeAgentBuilder {
         private int maxContextOutputChars = 2000;
         private boolean verbose = false;
         private ConversationMemory sessionMemory;
+        private java.nio.file.Path claudeCompatWorkspace;
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -273,6 +274,20 @@ public class RegnexeAgentBuilder {
 
         public Builder withVerbose(boolean verbose) {
             this.verbose = verbose;
+            return this;
+        }
+
+        /**
+         * Root directory for {@link org.salt.jlangchain.core.skill.Skill}'s Claude-compatible
+         * mode scoped filesystem tools (see {@code Skill.Builder#claudeCompatWorkspace}),
+         * applied to every SKILL capability this agent runs (both planner-selected and
+         * {@link RegnexeAgent#executeSkill} direct invocation). Unset means each skill gets its
+         * own throwaway temp directory — set this to give skills real, persistent access to
+         * (typically) your plugin/skill directory tree, so a skill-authoring skill can see and
+         * edit existing skills instead of starting from an empty sandbox every time.
+         */
+        public Builder withClaudeCompatWorkspace(java.nio.file.Path workspace) {
+            this.claudeCompatWorkspace = workspace;
             return this;
         }
 
@@ -413,7 +428,8 @@ public class RegnexeAgentBuilder {
                     maxAgentIterations,
                     maxContextOutputChars,
                     verbose,
-                    sessionMemory
+                    sessionMemory,
+                    claudeCompatWorkspace
             );
         }
     }

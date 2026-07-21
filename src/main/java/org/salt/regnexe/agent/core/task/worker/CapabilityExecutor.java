@@ -103,8 +103,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         // prefix each tool call with "<type>:<name>" (mcp_tool/skill/subagent). Names not
         // present here (e.g. a sub-agent's private own-tools) get no type prefix.
         Map<String, CapabilityType> typeByName = new HashMap<>();
+        java.nio.file.Path claudeCompatWorkspace = bus.getTransmit(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE);
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skills, subAgents,
-                maxAgentIterations, listener, taskId, round, verbose, toolExecutions, typeByName);
+                maxAgentIterations, listener, taskId, round, verbose, toolExecutions, typeByName, claudeCompatWorkspace);
         PlanOutput plan = currentRound(state).getPlan();
         ResultStrategy resultStrategy = resolveResultStrategy(plan);
         boolean returnLastToolResult = resultStrategy == ResultStrategy.RETURN_LAST;
@@ -246,7 +247,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                      Integer maxIterations,
                                      AgentEventListener listener, String taskId, int round, boolean verbose,
                                      List<ToolExecutionRecord> toolExecutions,
-                                     Map<String, CapabilityType> typeByName) {
+                                     Map<String, CapabilityType> typeByName,
+                                     java.nio.file.Path claudeCompatWorkspace) {
         if (marketplace == null || capIds == null) return;
 
         Set<String> seenCapIds = new HashSet<>();
@@ -266,6 +268,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                     if (cap.getSkillConfig() != null) {
                         typeByName.put(cap.getName(), CapabilityType.SKILL);
                         Skill.Builder sb = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
+                        if (claudeCompatWorkspace != null) {
+                            sb.claudeCompatWorkspace(claudeCompatWorkspace);
+                        }
                         if (verbose) {
                             sb.verbose(true);
                         } else {

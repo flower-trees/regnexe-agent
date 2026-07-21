@@ -17,6 +17,7 @@ package org.salt.regnexe.agent.core;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
 import org.salt.function.flow.FlowInstance;
+import org.salt.regnexe.agent.core.common.enums.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
@@ -24,6 +25,7 @@ import org.salt.regnexe.agent.core.event.EventType;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.market.Marketplace;
+import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.salt.regnexe.agent.core.task.ResultComposer;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
@@ -47,8 +49,10 @@ import org.salt.jlangchain.core.history.storage.ConversationStorage;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
 import org.salt.jlangchain.core.message.MessageType;
+import org.salt.jlangchain.core.skill.Skill;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -87,6 +91,7 @@ public class RegnexeAgent {
     private final int maxContextOutputChars;
     private final boolean verbose;
     private final ConversationMemory sessionMemory;
+    private final Path claudeCompatWorkspace;
 
     /** Set at the start of each execute()/resume(); checked by pause(). */
     private volatile AtomicBoolean activeStopSignal;
@@ -110,7 +115,8 @@ public class RegnexeAgent {
                 int maxAgentIterations,
                 int maxContextOutputChars,
                 boolean verbose,
-                ConversationMemory sessionMemory) {
+                ConversationMemory sessionMemory,
+                Path claudeCompatWorkspace) {
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -131,6 +137,7 @@ public class RegnexeAgent {
         this.maxContextOutputChars = maxContextOutputChars;
         this.verbose = verbose;
         this.sessionMemory = sessionMemory;
+        this.claudeCompatWorkspace = claudeCompatWorkspace;
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -190,6 +197,89 @@ public class RegnexeAgent {
         if (signal != null) {
             signal.set(true);
         }
+    }
+
+    /** Read-only access to the marketplace, e.g. for a CLI to list/resolve capabilities by name. */
+    public Marketplace getMarketplace() {
+        return marketplace;
+    }
+
+    /**
+     * Directly invoke a SKILL capability by id, bypassing Search/Plan/Reflect.
+     * Used for explicit user-triggered invocation (e.g. CLI "/skill-name args"), as opposed to
+     * the planner autonomously selecting the skill during {@link #execute}.
+     *
+     * <p>Does not create a {@link TaskExecutionState} or touch {@code taskStore} — a skill run
+     * cannot be paused/resumed via {@link #pause()}/{@link #resume}. Events still flow through
+     * the same {@link #eventListener} used by execute()/resume(), so a caller's event rendering
+     * (including the {@code TASK_TOKEN_SUMMARY} that {@code TokenAggregatingEventListener} emits
+     * before {@code AGENT_COMPLETED}) needs no special-casing.
+     *
+     * @param capabilityId capability id as registered in the marketplace (format:
+     *                      {@code <pluginId>.<skillName>})
+     * @param args          raw argument text passed to the skill's internal executor as the user turn
+     * @param sessionId     session to store the resulting turn under; null skips session-history storage
+     * @param displayGoal   human-readable form for session history (e.g. "/review src/Foo.java");
+     *                      falls back to "/<capabilityId> <args>" when null/blank
+     */
+    public AgentResult executeSkill(String capabilityId, String args, String sessionId, String displayGoal) {
+        CapabilityDescriptor cap = marketplace.resolveDescriptor(capabilityId);
+        if (cap == null) {
+            throw new IllegalArgumentException("Unknown skill: " + capabilityId);
+        }
+        if (cap.getType() != CapabilityType.SKILL || cap.getSkillConfig() == null) {
+            throw new IllegalArgumentException("Not a skill capability: " + capabilityId);
+        }
+
+        String taskId = UUID.randomUUID().toString();
+        BaseChatModel llm = llmProvider.provide(defaultModel);
+
+        eventListener.dispatch(AgentEvent.of(taskId, 0, EventType.AGENT_STARTED,
+                "Skill: " + capabilityId + " | args: " + args));
+
+        Skill.Builder skillBuilder = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
+        if (claudeCompatWorkspace != null) {
+            skillBuilder.claudeCompatWorkspace(claudeCompatWorkspace);
+        }
+        if (verbose) {
+            skillBuilder.verbose(true);
+        } else {
+            String scope = "[skill:" + cap.getName() + "]";
+            skillBuilder.onLlm(text -> eventListener.dispatch(
+                    AgentEvent.of(taskId, 0, EventType.SKILL_LLM_RESPONDED, scope + " " + text)));
+            skillBuilder.onToolCall(tc -> eventListener.dispatch(
+                    AgentEvent.of(taskId, 0, EventType.TOOL_CALLED, scope + " " + tc)));
+            skillBuilder.onObservation(obs -> eventListener.dispatch(
+                    AgentEvent.of(taskId, 0, EventType.TOOL_RESULT, scope + " " + obs)));
+        }
+        skillBuilder.onTokenUsage(u -> eventListener.dispatch(
+                AgentEvent.ofCapabilityTokenUsage(taskId, 0, cap.getName(), u)));
+
+        String finalText;
+        TaskStatus status;
+        try {
+            finalText = skillBuilder.build().invoke(args == null ? "" : args);
+            status = TaskStatus.FINISHED;
+        } catch (Exception e) {
+            log.warn("executeSkill '{}' failed: {}", capabilityId, e.getMessage());
+            finalText = "Skill execution failed: " + e.getMessage();
+            status = TaskStatus.FAILED;
+        }
+
+        if (sessionId != null && status == TaskStatus.FINISHED) {
+            String humanTurn = (displayGoal != null && !displayGoal.isBlank())
+                    ? displayGoal : ("/" + capabilityId + " " + (args == null ? "" : args)).trim();
+            storeSessionRound(sessionId, humanTurn, finalText);
+        }
+
+        eventListener.dispatch(AgentEvent.of(taskId, 0, EventType.AGENT_COMPLETED,
+                "Status: " + status + " | Skill: " + capabilityId));
+
+        return AgentResult.builder()
+                .taskId(taskId)
+                .status(status)
+                .finalText(finalText)
+                .build();
     }
 
     // ── Loop ─────────────────────────────────────────────────────────────────
@@ -298,6 +388,9 @@ public class RegnexeAgent {
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
         map.put(ContextBusKeys.MAX_CONTEXT_OUTPUT_CHARS, maxContextOutputChars);
         map.put(ContextBusKeys.VERBOSE, verbose);
+        if (claudeCompatWorkspace != null) {
+            map.put(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE, claudeCompatWorkspace);
+        }
         return map;
     }
 
