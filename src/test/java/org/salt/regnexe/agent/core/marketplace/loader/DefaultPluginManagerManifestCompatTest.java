@@ -12,14 +12,15 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core.market;
+package org.salt.regnexe.agent.core.marketplace.loader;
 
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Test;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -140,10 +141,43 @@ public class DefaultPluginManagerManifestCompatTest {
         }
     }
 
-    // ── flat "personal skill" layout: bare SKILL.md, no manifest, no skills/ nesting ─
+    // ── flat "personal skill" layout: dedicated skills/ root, bare SKILL.md, no manifest ─
+    //
+    // Per docs/design/marketplace-plugin-design.md §3.1, this layout now lives under a
+    // dedicated skills/ root (FlatSkillLoader / addSkillsDirectory), not as a fallback inside
+    // a manifest-plugin directory scan (addDirectory) — see
+    // directoryWithoutAnyManifestShouldBeSkippedWithoutError below for the addDirectory side.
 
     @Test
-    public void directoryWithBareSkillMdAtRoot_loadsAsSingleSkillPlugin() throws IOException {
+    public void skillsDirectoryWithBareSkillMd_loadsAsSingleSkillPlugin() throws IOException {
+        Path skillsDir = Files.createTempDirectory("regnexe-skills-test-");
+        try {
+            Path skillDir = skillsDir.resolve("tang-poetry-composer");
+            Files.createDirectories(skillDir);
+            Files.writeString(skillDir.resolve("SKILL.md"), """
+                    ---
+                    name: tang-poetry-composer
+                    description: Compose classical Tang poetry.
+                    ---
+                    Body text.
+                    """);
+            // no plugin.yaml, no .claude-plugin/plugin.json, no further nesting —
+            // exactly the shape skill-creator itself produces for a standalone skill.
+
+            SimpleMarketplace marketplace = new SimpleMarketplace();
+            marketplace.load(new DefaultPluginManager().addSkillsDirectory(skillsDir.toString()));
+
+            CapabilityDescriptor cap = marketplace.resolveDescriptor("tang-poetry-composer.tang-poetry-composer");
+            Assert.assertNotNull("flat SKILL.md under skills/ must load without any manifest", cap);
+            Assert.assertEquals(CapabilityType.SKILL, cap.getType());
+            Assert.assertEquals("tang-poetry-composer", cap.getSkillConfig().getName());
+        } finally {
+            deleteTree(skillsDir);
+        }
+    }
+
+    @Test
+    public void addDirectoryNoLongerFallsBackToFlatSkillLoading() throws IOException {
         Path baseDir = Files.createTempDirectory("regnexe-manifest-test-");
         try {
             Path pluginDir = baseDir.resolve("tang-poetry-composer");
@@ -155,16 +189,12 @@ public class DefaultPluginManagerManifestCompatTest {
                     ---
                     Body text.
                     """);
-            // no plugin.yaml, no .claude-plugin/plugin.json, no skills/ subfolder —
-            // exactly the shape skill-creator itself produces for a standalone skill.
 
             SimpleMarketplace marketplace = new SimpleMarketplace();
             marketplace.load(new DefaultPluginManager().addDirectory(baseDir.toString()));
 
-            CapabilityDescriptor cap = marketplace.resolveDescriptor("tang-poetry-composer.tang-poetry-composer");
-            Assert.assertNotNull("flat SKILL.md at plugin root must load without any manifest", cap);
-            Assert.assertEquals(CapabilityType.SKILL, cap.getType());
-            Assert.assertEquals("tang-poetry-composer", cap.getSkillConfig().getName());
+            Assert.assertTrue("addDirectory must not treat a bare SKILL.md as a manifest-less plugin anymore",
+                    marketplace.listEnabled().isEmpty());
         } finally {
             deleteTree(baseDir);
         }

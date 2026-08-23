@@ -14,7 +14,7 @@
 
 package org.salt.regnexe.agent.core.example.testplugins;
 
-import org.salt.regnexe.agent.core.market.plugin.Plugin;
+import org.salt.regnexe.agent.core.marketplace.plugin.Plugin;
 import org.salt.jlangchain.rag.tools.annotation.AgentTool;
 
 /**

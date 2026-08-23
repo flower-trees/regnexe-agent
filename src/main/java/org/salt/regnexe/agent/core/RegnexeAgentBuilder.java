@@ -22,10 +22,14 @@ import org.salt.regnexe.agent.core.llm.DefaultModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.DefaultPluginManager;
-import org.salt.regnexe.agent.core.market.Marketplace;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.scope.EnabledStateLoader;
+import org.salt.regnexe.agent.core.marketplace.scope.Scope;
+import org.salt.regnexe.agent.core.marketplace.scope.ScopeResolver;
+import org.salt.regnexe.agent.core.marketplace.scope.ScopedEnabledState;
 import org.salt.regnexe.agent.core.task.DefaultResultComposer;
 import org.salt.regnexe.agent.core.task.ResultComposer;
 import org.salt.regnexe.agent.core.task.store.InMemoryTaskStore;
@@ -45,6 +49,10 @@ import org.salt.jlangchain.core.skill.SkillConfig;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Spring-managed factory for {@link RegnexeAgent} instances.
@@ -145,9 +153,23 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withScanPackages(basePackages);
     }
 
-    /** Convenience: load plugins from file-system directories without constructing a marketplace manually. */
+    /** Convenience: load manifest-based plugins from file-system directories without constructing a marketplace manually. */
     public Builder withDirectory(String... dirs) {
         return new Builder(flowEngine, chainActor).withDirectory(dirs);
+    }
+
+    /** Convenience: load manifest-less, directly-editable skills (skills/&lt;name&gt;/SKILL.md) without constructing a marketplace manually. */
+    public Builder withSkillsDirectory(String... dirs) {
+        return new Builder(flowEngine, chainActor).withSkillsDirectory(dirs);
+    }
+
+    /**
+     * Convenience: load one or more already-resolved plugin directories (each directory itself
+     * carries the manifest — e.g. {@code cache/<plugin-id>/<hash>/} paths resolved by
+     * {@code PluginCacheInstaller}) without constructing a marketplace manually.
+     */
+    public Builder withPluginDirectory(String... dirs) {
+        return new Builder(flowEngine, chainActor).withPluginDirectory(dirs);
     }
 
     /** Convenience: register one or more pre-built Tool objects directly as MCP_TOOL capabilities. */
@@ -337,7 +359,7 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
-        /** Convenience: load plugins from file-system directories without constructing a marketplace manually. */
+        /** Convenience: load manifest-based plugins from file-system directories without constructing a marketplace manually. */
         public Builder withDirectory(String... dirs) {
             if (this.marketplace == null) {
                 this.marketplace = new SimpleMarketplace();
@@ -347,6 +369,70 @@ public class RegnexeAgentBuilder {
                 mgr.addDirectory(dir);
             }
             this.marketplace.load(mgr);
+            return this;
+        }
+
+        /** Convenience: load manifest-less, directly-editable skills (skills/&lt;name&gt;/SKILL.md) without constructing a marketplace manually. */
+        public Builder withSkillsDirectory(String... dirs) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (String dir : dirs) {
+                mgr.addSkillsDirectory(dir);
+            }
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /**
+         * Convenience: load one or more already-resolved plugin directories — each directory
+         * itself carries the manifest, unlike {@link #withDirectory} which expects a parent
+         * containing many plugin subdirectories.
+         */
+        public Builder withPluginDirectory(String... dirs) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (String dir : dirs) {
+                mgr.addPluginDirectory(dir);
+            }
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /**
+         * Applies each scope's {@code enabled.yml} on top of whatever has been installed so far,
+         * lowest-priority layer first (a later layer's key wins — see {@code ScopeResolver}).
+         * {@code enabled.yml} keys are {@code <plugin-id>@<marketplace-name>} (§3.2), but
+         * {@link Marketplace#enable}/{@link Marketplace#disable} only key on pluginId — regnexe
+         * doesn't namespace its registry by marketplace (a deliberate simplification, see the
+         * design doc's "Scope-creep self-correction" note), so the {@code @marketplace} suffix is
+         * stripped here. A no-op if no marketplace has been populated yet (nothing to enable/
+         * disable). {@code enabledYmlByScope} entries with a null path are skipped.
+         */
+        public Builder withEnabledState(Map<Scope, java.nio.file.Path> enabledYmlByScope, List<Scope> priorityOrder) {
+            if (this.marketplace == null) {
+                return this;
+            }
+            EnabledStateLoader loader = new EnabledStateLoader();
+            ScopeResolver resolver = new ScopeResolver();
+            List<ScopedEnabledState> layers = new ArrayList<>();
+            for (Scope scope : priorityOrder) {
+                java.nio.file.Path path = enabledYmlByScope.get(scope);
+                if (path == null) continue;
+                layers.add(new ScopedEnabledState(scope, loader.load(path)));
+            }
+            Map<String, Boolean> resolved = resolver.resolve(layers);
+            resolved.forEach((globalId, isEnabled) -> {
+                String pluginId = globalId.contains("@") ? globalId.substring(0, globalId.lastIndexOf('@')) : globalId;
+                if (Boolean.TRUE.equals(isEnabled)) {
+                    this.marketplace.enable(pluginId);
+                } else {
+                    this.marketplace.disable(pluginId);
+                }
+            });
             return this;
         }
 

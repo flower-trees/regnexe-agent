@@ -22,13 +22,13 @@ import org.salt.jlangchain.rag.tools.Tool;
 import org.salt.regnexe.agent.core.RegnexeAgent;
 import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
 import org.salt.regnexe.agent.core.TestApplication;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -70,7 +70,7 @@ public class Example09CodeWorkspaceComponentTest {
         Tool readFile = workspaceTools.readFileTool();
 
         String searchResult = searchCode.invoke("CapabilityDescriptor.java").toString();
-        String fileResult = readFile.invoke("src/main/java/org/salt/regnexe/agent/core/market/plugin/CapabilityDescriptor.java").toString();
+        String fileResult = readFile.invoke("src/main/java/org/salt/regnexe/agent/core/marketplace/capability/CapabilityDescriptor.java").toString();
 
         Assert.assertTrue(searchResult.contains("CapabilityDescriptor.java"));
         Assert.assertTrue(fileResult.contains("public class CapabilityDescriptor"));
@@ -174,7 +174,7 @@ public class Example09CodeWorkspaceComponentTest {
 
         AgentResult result = agent.execute(
                 "Use the code workspace agent to read " +
-                "src/main/java/org/salt/regnexe/agent/core/market/plugin/CapabilityDescriptor.java, " +
+                "src/main/java/org/salt/regnexe/agent/core/marketplace/capability/CapabilityDescriptor.java, " +
                 "identify the method that fills missing name and description metadata, and run the whitelisted command key pwd. " +
                 "Do not modify files.");
 

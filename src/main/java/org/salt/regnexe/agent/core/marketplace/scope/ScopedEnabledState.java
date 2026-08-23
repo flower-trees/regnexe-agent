@@ -12,33 +12,17 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core.task.state.capability;
+package org.salt.regnexe.agent.core.marketplace.scope;
 
-import lombok.Data;
-import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
-
-import java.util.List;
 import java.util.Map;
 
 /**
- * A single capability candidate returned by Searcher
+ * One scope's enabled/disabled declarations, as parsed from that scope's {@code enabled.yml}.
+ *
+ * <p>Keys are the plugin-installer's choice of global id (docs/design/marketplace-plugin-design.md
+ * §3.2 uses {@code <plugin-id>@<marketplace-name>}, mirroring Claude Code's
+ * {@code plugin-name@marketplace-name}) — {@link ScopeResolver} treats them as opaque strings and
+ * doesn't interpret the format.
  */
-@Data
-public class CapabilityCandidate {
-
-    private String capabilityId;
-
-    private String pluginId;
-
-    private CapabilityType type;
-
-    private String name;
-
-    private String description;
-
-    private List<String> allowedTools;
-
-    private double score;
-
-    private Map<String, Object> metadata;
+public record ScopedEnabledState(Scope scope, Map<String, Boolean> enabled) {
 }

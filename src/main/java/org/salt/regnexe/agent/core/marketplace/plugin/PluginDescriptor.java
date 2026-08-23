@@ -12,10 +12,11 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core.market.plugin;
+package org.salt.regnexe.agent.core.marketplace.plugin;
 
 import lombok.Data;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.jlangchain.core.skill.SkillConfig;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;

@@ -12,10 +12,11 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core.market;
+package org.salt.regnexe.agent.core.marketplace;
 
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.loader.PluginManager;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilitySearchResult;
 import org.salt.regnexe.agent.core.task.state.capability.SearchQuery;
 import org.salt.jlangchain.rag.tools.Tool;

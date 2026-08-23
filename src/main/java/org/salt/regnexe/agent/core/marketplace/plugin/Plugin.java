@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core.market.plugin;
+package org.salt.regnexe.agent.core.marketplace.plugin;
 
 import java.lang.annotation.*;
 

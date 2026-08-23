@@ -21,7 +21,7 @@ import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
-import org.salt.regnexe.agent.core.market.Marketplace;
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilitySearchResult;

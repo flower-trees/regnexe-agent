@@ -12,7 +12,9 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core.market;
+package org.salt.regnexe.agent.core.marketplace.loader;
+
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
 
 /**
  * Discovers plugins from local sources (annotation scan, directory) and installs
@@ -30,8 +32,20 @@ package org.salt.regnexe.agent.core.market;
  */
 public interface PluginManager {
 
-    /** Accumulate a base directory path for directory-based plugin loading. */
+    /** Accumulate a base directory of manifest-based plugin bundles (plugin.yaml + tools/skills/subagents). */
     void loadFromDirectory(String directoryPath);
+
+    /**
+     * Accumulate a single, already-resolved plugin directory (the directory itself has the
+     * manifest — unlike {@link #loadFromDirectory}, this is not a parent containing multiple
+     * plugin subdirectories). Used for {@code marketplaces/<name>/cache/<plugin-id>/<hash>/}
+     * paths resolved by {@code PluginCacheInstaller} — see
+     * docs/design/marketplace-plugin-design.md §6.3.
+     */
+    void loadPluginDirectory(String pluginDirectoryPath);
+
+    /** Accumulate a base directory of manifest-less, directly-editable skills (skills/&lt;name&gt;/SKILL.md). */
+    void loadSkillsFromDirectory(String directoryPath);
 
     /** Accumulate base packages for {@code @Plugin}-annotated class scanning. */
     void scanPackages(String... basePackages);

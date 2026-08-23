@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-package org.salt.regnexe.agent.core.common.enums;
+package org.salt.regnexe.agent.core.marketplace.capability;
 
 import lombok.Getter;
 
