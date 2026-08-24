@@ -23,9 +23,22 @@ regnexe-agent 这一侧（第二节全部内容）已经按设计落地，`mvn i
 - `loader/PluginManager` 新增 `loadPluginDirectory`（单个已解析插件目录，不做子目录枚举）、`DefaultPluginManager` 对应新增 `addPluginDirectory`，`RegnexeAgentBuilder.Builder` 新增 `withPluginDirectory(...)` 和 `withEnabledState(Map<Scope,Path>, List<Scope>)`
 - regnexe-cli：`resolveMarketplacePluginDirectories()` 改成只解析 `cache/<plugin-id>/CURRENT`（不再碰 `plugins/`，见 §6.3）；新增 `/plugin install|uninstall|enable|disable|list` 五个子命令；`buildAgent()` 里接了 `withEnabledState`，User/Project 两层，**Project 覆盖 User** 是这轮定的临时默认值（第五节①最终优先级顺序仍未正式拍板，这只是让 enable/disable 有地方生效的务实选择，不是对开放问题的最终回答）
 
-**验证时抓到一个真 bug，已修复**：`PluginCacheInstaller.install()` 最初直接对 `source` 调 `Files.walk()` 算哈希/拷贝——但 `Files.walk()` 只在**递归过程中**跟随符号链接，不会解析作为**起点**传入的那个符号链接本身。用 `harness-testbed` 案例 002 那个真实场景（`plugins/<id>` 是指向真实第三方插件的软链接）实测时，第一次跑出来的 hash 是 `e3b0c44298fc`——查了一下就是 SHA-256 对空输入的哈希，说明什么都没读到，cache 目录建出来是空的。修复：`install()` 一开始就对 `source` 调 `toRealPath()` 解析这一跳，再传给哈希/拷贝逻辑。补了回归测试 `install_sourceIsSymlinkToDirectory_resolvesRealContent`，并在 `harness-testbed` 里用真实的 `claude-md-management` 符号链接重新跑了一遍 `/plugin install` 确认修复生效（cache 目录里能看到 `plugin.json`/`skills/`/`commands/` 等真实文件）。这是这次"不只写单元测试、也拿真实第三方内容验证一遍"再次抓到问题的例子——纯手写的测试 fixture（哪怕专门测了符号链接）复现了这个具体 bug 之后才敢说改对了。
+**验证时抓到两个真 bug，均已修复**：
 
-**仍未做的**：远程拉取（§6.1 明确排除）、Local/Managed scope 磁盘位置、企业级治理（第五节②④⑤未变）。
+1. `PluginCacheInstaller.install()` 最初直接对 `source` 调 `Files.walk()` 算哈希/拷贝——但 `Files.walk()` 只在**递归过程中**跟随符号链接，不会解析作为**起点**传入的那个符号链接本身。用 `harness-testbed` 案例 002 那个真实场景（`plugins/<id>` 是指向真实第三方插件的软链接）实测时，第一次跑出来的 hash 是 `e3b0c44298fc`——查了一下就是 SHA-256 对空输入的哈希，说明什么都没读到，cache 目录建出来是空的。修复：`install()` 一开始就对 `source` 调 `toRealPath()` 解析这一跳，再传给哈希/拷贝逻辑。补了回归测试 `install_sourceIsSymlinkToDirectory_resolvesRealContent`，并在 `harness-testbed` 里用真实的 `claude-md-management` 符号链接重新跑了一遍 `/plugin install` 确认修复生效（cache 目录里能看到 `plugin.json`/`skills/`/`commands/` 等真实文件）。
+2. `ManifestPluginLoader.load(pluginDir, manifest)` 在 manifest 没声明 `pluginId` 时用 `pluginDir` 自己的目录名兜底——这条规则对 `plugins/<id>/`（目录名就是 id）是对的，但 `DefaultPluginManager.loadSinglePluginDirectory` 从 `cache/<id>/<hash>/` 加载时，传的 `pluginDir` 是**哈希目录**，兜底出来的 pluginId 变成了哈希本身。真实的 `claude-md-management` 插件 `.claude-plugin/plugin.json` 只写了 `name`、没写 `pluginId`（Claude Code 插件的常见写法），于是被注册成了 pluginId `cc3ff912a41e`，导致 `/plugin disable claude-md-management@...` 精确地切换了一个不存在的 id——UI 显示成功，运行时完全没生效。修复：`ManifestPluginLoader.load` 加了 `(Path, PluginManifest, String idFallback)` 重载，`DefaultPluginManager` 从 cache 加载时改用**父目录名**（真正的 id）做兜底。补了 `CachedPluginLoadingTest`，先确认它在修复前会失败（复现出同样的 `[cc3ff912a41e]` 错误 id），再确认修复后通过。
+
+两次都是"纯手写的测试 fixture 测不出来、只有拿真实的、字段不规范的第三方插件（`claude-md-management`）走一遍完整链路才暴露"的同一种模式——`harness-testbed` 案例 002 的完整记录见其 `results.md`。
+
+**这轮之后又发现并修复了一个设计缺口**（不是 bug，是原设计没覆盖到的场景）：同一个 pluginId 装进不同 marketplace 名字、或者同时装在 user/project 两个 scope，`SimpleMarketplace` 的注册表只按裸 `pluginId` 去重（不带 marketplace 命名空间——参见前面"Scope-creep self-correction"那条决定），运行时只有先扫到的生效，其余的被 `DefaultPluginManager` 的"先到先得"规则静默跳过，且这条 WARN 级日志在打包后的 CLI 里既不打印到控制台也不写文件，用户完全看不到。`/plugin list` 原本也只显示"磁盘上装没装"，不反映真正生效的是哪一个，容易造成"看着两个都装好了、实际只有一个在跑"的误判。
+
+修复（regnexe-cli 侧，不改 regnexe-agent 的"先到先得"机制本身）：
+- `/plugin install` 成功后、`/plugin list` 每次都会检测是否存在 pluginId 冲突，冲突时打印形如 `[warn] plugin id 'X' is installed in more than one place — only X@A (project) is actually active; X@B (project) is silently shadowed` 的提示，把原本完全静默的行为变成可见信息
+- `/plugin list` 显示的 enabled 状态改成真正跑一遍 `ScopeResolver`（User→Project 合并，跟 `buildAgent()` 用的是同一段代码 `resolveEnabledAcrossScopes`），不再只读当前这一个 scope 自己的 `enabled.yml`——之前如果同一个 key 在两个 scope 都有声明，`/plugin list` 显示的可能跟实际生效的状态对不上
+
+这不是"解决"冲突（依然是先到先得，没有改成报错拒绝或者强制加 marketplace 命名空间），只是把之前完全不可见的行为变得可诊断——真要禁止冲突或者改注册表 key 结构，是更大的改动，这轮没做。
+
+**仍未做的**：远程拉取（§6.1 明确排除）、Local/Managed scope 磁盘位置、企业级治理（第五节②④⑤未变）、真正禁止/阻止 pluginId 冲突（这轮只做到了让冲突可见，没有改变"先到先得"的底层机制）。
 
 ---
 
@@ -247,7 +260,7 @@ marketplaces/<name>/
 | `/plugin install <本地路径> [--marketplace <name>] [--scope user\|project]` | 不传 `--marketplace` 默认 `default`；不传 `--scope` 默认 `project`（跟 `resolveSkillDirectories` 现在的默认取向一致：项目级优先可见） |
 | `/plugin uninstall <plugin-id>@<marketplace> [--scope user\|project]` | 第 4 点描述的立即删除 |
 | `/plugin enable <plugin-id>@<marketplace> [--scope ...]` / `/plugin disable ...` | 调用 `EnabledStateWriter.setEnabled(..., true/false)`——这两个命令跟 install/uninstall 是分开的缺口（`ScopeResolver`/`SimpleMarketplace` 的 enable/disable 判断逻辑本身已经在，只是没人写 `enabled.yml`），顺带一起补上 |
-| `/plugin list` | 遍历所有 marketplace 的 `plugins/` + `cache/`，标出每个插件当前 enabled 状态（读 `ScopeResolver` 合并结果） |
+| `/plugin list` | 遍历所有 marketplace 的 `cache/`（不含 `plugins/`——那是清单，见 §6.3，`/plugin list` 目前不展示"能装但没装"的东西，只展示已装的），标出每个插件真正生效的 enabled 状态（`ScopeResolver` 合并 User/Project 后的结果，不是单看当前 scope 自己的 `enabled.yml`），并在检测到同一个 pluginId 装了不止一处时打印冲突警告（见"实现记录"） |
 
 regnexe-agent 侧新增一个不依赖 CLI/session 概念的纯 API 类 `marketplace.loader.PluginCacheInstaller`（`install(Path source, Path marketplaceRoot) -> InstallResult`、`uninstall(Path marketplaceRoot, String pluginId) -> boolean`），CliMain 的 `/plugin` 命令只做参数解析和路径拼接，实际拷贝/哈希/`CURRENT` 读写都在这个类里——保持"regnexe-agent 是库、regnexe-cli 是壳"的既有分工。
 
