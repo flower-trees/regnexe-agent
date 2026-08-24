@@ -43,7 +43,7 @@ import java.util.List;
 
 /**
  * Covers {@link RegnexeAgent#executeSkill} — direct skill invocation bypassing
- * Search/Plan/Reflect, per docs/design/skill-slash-invocation.md (regnexe-cli).
+ * Search/Plan/Reflect.
  *
  * <p>Tests 1–2 are pure validation (no LLM call). Tests 3–4 run a real Skill against a live
  * model (needs DASHSCOPE_API_KEY, same prerequisite as Example05PluginLoadingTest's

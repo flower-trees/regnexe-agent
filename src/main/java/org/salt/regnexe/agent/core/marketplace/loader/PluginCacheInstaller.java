@@ -33,10 +33,9 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
- * Filesystem-only "install/uninstall" for the local-path plugin cache described in
- * docs/design/marketplace-plugin-design.md §6. No CLI/session concept here — {@code regnexe-cli}
- * does argument parsing and scope→path resolution, this class does the actual copy/hash/pointer
- * bookkeeping under a given {@code marketplaces/<name>/} root:
+ * Filesystem-only "install/uninstall" for the local-path plugin cache. No CLI/session concept
+ * here — {@code regnexe-cli} does argument parsing and scope→path resolution, this class does
+ * the actual copy/hash/pointer bookkeeping under a given {@code marketplaces/<name>/} root:
  *
  * <pre>
  * marketplaces/&lt;name&gt;/

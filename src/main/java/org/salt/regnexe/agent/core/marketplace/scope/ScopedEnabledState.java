@@ -19,10 +19,9 @@ import java.util.Map;
 /**
  * One scope's enabled/disabled declarations, as parsed from that scope's {@code enabled.yml}.
  *
- * <p>Keys are the plugin-installer's choice of global id (docs/design/marketplace-plugin-design.md
- * §3.2 uses {@code <plugin-id>@<marketplace-name>}, mirroring Claude Code's
- * {@code plugin-name@marketplace-name}) — {@link ScopeResolver} treats them as opaque strings and
- * doesn't interpret the format.
+ * <p>Keys are the plugin-installer's choice of global id ({@code <plugin-id>@<marketplace-name>},
+ * mirroring Claude Code's {@code plugin-name@marketplace-name}) — {@link ScopeResolver} treats
+ * them as opaque strings and doesn't interpret the format.
  */
 public record ScopedEnabledState(Scope scope, Map<String, Boolean> enabled) {
 }

@@ -30,12 +30,11 @@ import java.util.Map;
 /**
  * The write side of {@link EnabledStateLoader}, which is deliberately read-only. Used by
  * {@code /plugin install|uninstall|enable|disable} (regnexe-cli) to persist the soft on/off
- * switch described in docs/design/marketplace-plugin-design.md §3.3 / §6.5 — disable is not
- * uninstall, it only flips a key in {@code enabled.yml}.
+ * switch — disable is not uninstall, it only flips a key in {@code enabled.yml}.
  *
  * <p>Writes are read-modify-write against the whole file (not append-only), so concurrent writers
- * to the same file can clobber each other — acceptable for a single-process interactive CLI (see
- * §6.4's reasoning for why regnexe-cli doesn't need to defend against that class of race yet).
+ * to the same file can clobber each other — acceptable for a single-process interactive CLI,
+ * which doesn't need to defend against that class of race yet.
  */
 @Slf4j
 public class EnabledStateWriter {

@@ -1,6 +1,7 @@
 # Marketplace / Plugin 目录与包结构设计
 
 - 状态：**第二节（regnexe-agent 包结构）、第六节（Install/Cache/Uninstall/enabled.yml 写入 + CLI 接线）均已实现**——见下面"实现记录"
+- 后续文档：能力命名规则与冲突处理专门拆到了 `docs/design/02-capability-naming-and-collision-design.md`（跨 marketplace/scope/skill 撞名的完整分类和修复方案）
 - 涉及仓库：`j-langchain` → `regnexe-agent` → `regnexe-cli`（依赖方向从左到右）
 - 背景资料：`docs/harness/claude-code/`、`docs/harness/codex/`、`docs/harness/deepseek/` —— 本设计是在读完这三家 Harness 的 Marketplace/Plugin 分析后，对照 regnexe 现状做的差距梳理和重新设计
 - 面向读者：下一个要实现这部分改动的人或 AI；目的是不用重新走一遍讨论过程就能知道"最终定了什么、为什么这么定、还有哪些明确没做"

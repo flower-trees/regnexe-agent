@@ -29,7 +29,7 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Covers the manifest-compat work from docs/design/skill-slash-invocation.md (regnexe-cli):
+ * Covers the manifest-compat work:
  * {@code DefaultPluginManager} accepting Claude Code's {@code .claude-plugin/plugin.json} manifest
  * in addition to its native {@code plugin.yaml}, and degrading duplicate-pluginId install conflicts
  * to a skip instead of crashing the whole directory scan.
@@ -143,7 +143,7 @@ public class DefaultPluginManagerManifestCompatTest {
 
     // ── flat "personal skill" layout: dedicated skills/ root, bare SKILL.md, no manifest ─
     //
-    // Per docs/design/marketplace-plugin-design.md §3.1, this layout now lives under a
+    // This layout now lives under a
     // dedicated skills/ root (FlatSkillLoader / addSkillsDirectory), not as a fallback inside
     // a manifest-plugin directory scan (addDirectory) — see
     // directoryWithoutAnyManifestShouldBeSkippedWithoutError below for the addDirectory side.

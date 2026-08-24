@@ -25,10 +25,9 @@ import java.util.Map;
  * <p>Priority is deliberately <b>not</b> hardcoded here — callers supply {@link ScopedEnabledState}
  * layers already ordered from lowest to highest priority (a later layer's key overrides an
  * earlier layer's same key). regnexe-agent has no opinion on {@code .rex} on-disk conventions or
- * which scope should win; that's a harness (regnexe-cli) wiring decision. As of
- * docs/design/marketplace-plugin-design.md §5.1, the final Project-vs-User ordering — and
- * whether a LOCAL layer exists at all — is still an open question, so this class stays agnostic
- * rather than guessing.
+ * which scope should win; that's a harness (regnexe-cli) wiring decision. The final Project-vs-User
+ * ordering — and whether a LOCAL layer exists at all — is still an open question, so this class
+ * stays agnostic rather than guessing.
  *
  * <p>Only the enabled-state merge problem needs a resolver at all: regnexe's capabilityId is
  * already namespaced by pluginId ({@code pluginId + "." + name}), and

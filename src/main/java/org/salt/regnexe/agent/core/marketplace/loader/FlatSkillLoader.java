@@ -44,9 +44,9 @@ import java.util.stream.Stream;
  * exactly what skill-creator itself produces when asked to create a standalone skill (it writes
  * {@code <name>/SKILL.md} directly, no manifest, no further nesting).
  *
- * <p>Per docs/design/marketplace-plugin-design.md, this directory is never installed into a
- * version cache — it's read live, the same way {@link ManifestPluginLoader}'s marketplace
- * plugins currently are (cache support is deferred; see that document §2.3 / §3.3).
+ * <p>This directory is never installed into a version cache — it's read live, unlike
+ * {@link ManifestPluginLoader}'s marketplace plugins, which do go through the install/cache
+ * flow.
  *
  * <p>Each subdirectory becomes its own single-capability Plugin, {@code pluginId} = directory
  * name — matching {@code ManifestPluginLoader}'s {@code pluginId + "." + name} capabilityId

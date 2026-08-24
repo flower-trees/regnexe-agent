@@ -39,8 +39,7 @@ public interface PluginManager {
      * Accumulate a single, already-resolved plugin directory (the directory itself has the
      * manifest — unlike {@link #loadFromDirectory}, this is not a parent containing multiple
      * plugin subdirectories). Used for {@code marketplaces/<name>/cache/<plugin-id>/<hash>/}
-     * paths resolved by {@code PluginCacheInstaller} — see
-     * docs/design/marketplace-plugin-design.md §6.3.
+     * paths resolved by {@code PluginCacheInstaller}.
      */
     void loadPluginDirectory(String pluginDirectoryPath);
 

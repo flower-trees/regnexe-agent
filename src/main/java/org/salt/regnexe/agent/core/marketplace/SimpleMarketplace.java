@@ -45,6 +45,13 @@ public class SimpleMarketplace implements Marketplace {
      * capabilityId in particular is echoed verbatim by the planner LLM for exact-match
      * capability selection (see TaskPlanner) — a silent collision there would make two
      * unrelated capabilities indistinguishable to the LLM.
+     *
+     * <p>The capabilityId check covers duplicates against the global {@link #capabilityIds} set
+     * <em>and</em> duplicates within {@code plugin}'s own capability list — e.g. a manifest
+     * plugin with both {@code tools/foo} and {@code skills/foo} computes {@code pluginId.foo} for
+     * both. Without the in-batch check, two same-id capabilities from the same plugin would both
+     * get installed silently: {@link #resolveDescriptor} only matches by id string (not type), so
+     * whichever is iterated first would win with no error at all.
      */
     @Override
     public void install(PluginDescriptor plugin) {
@@ -54,9 +61,11 @@ public class SimpleMarketplace implements Marketplace {
         }
         List<CapabilityDescriptor> caps = plugin.getCapabilities() != null
                 ? plugin.getCapabilities() : List.of();
+        Set<String> seenInThisPlugin = new HashSet<>();
         for (CapabilityDescriptor cap : caps) {
-            if (capabilityIds.contains(cap.getCapabilityId())) {
-                throw new IllegalStateException("Capability id already registered: " + cap.getCapabilityId());
+            String capId = cap.getCapabilityId();
+            if (capabilityIds.contains(capId) || !seenInThisPlugin.add(capId)) {
+                throw new IllegalStateException("Capability id already registered: " + capId);
             }
         }
         caps.forEach(cap -> capabilityIds.add(cap.getCapabilityId()));
