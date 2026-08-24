@@ -193,7 +193,15 @@ public class DefaultPluginManager implements PluginManager {
         }
     }
 
-    /** {@code dirPath} itself carries the manifest — no subdirectory enumeration, unlike {@link #loadManifestDirectory}. */
+    /**
+     * {@code dirPath} itself carries the manifest — no subdirectory enumeration, unlike
+     * {@link #loadManifestDirectory}. {@code dirPath} is typically a
+     * {@code cache/<plugin-id>/<hash>/} path resolved by {@code PluginCacheInstaller} — the leaf
+     * directory name is a content hash, not a meaningful id, so the id fallback (used only when
+     * the manifest itself doesn't declare {@code pluginId}) is taken from the *parent* directory
+     * name instead. Using the hash as the fallback used to silently register plugins under the
+     * wrong id — see {@link ManifestPluginLoader#load(Path, PluginManifest, String)}.
+     */
     private void loadSinglePluginDirectory(String dirPath, Marketplace marketplace) {
         Path pluginDir = Path.of(dirPath);
         if (!Files.isDirectory(pluginDir)) {
@@ -205,7 +213,9 @@ public class DefaultPluginManager implements PluginManager {
             log.warn("Resolved plugin directory has no manifest, skipping: {}", dirPath);
             return;
         }
-        PluginDescriptor descriptor = manifestLoader.load(pluginDir, manifest);
+        Path parent = pluginDir.getParent();
+        String idFallback = parent != null ? parent.getFileName().toString() : pluginDir.getFileName().toString();
+        PluginDescriptor descriptor = manifestLoader.load(pluginDir, manifest, idFallback);
         if (descriptor != null) installCatching(descriptor, marketplace);
     }
 

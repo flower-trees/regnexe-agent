@@ -95,10 +95,30 @@ public class ManifestPluginLoader {
      * Builds the full {@link PluginDescriptor} for {@code pluginDir}, applying directory-name
      * fallbacks for any manifest field left unset. Returns null (instead of a capability-less
      * descriptor) when {@code tools/}/{@code skills/}/{@code subagents/} yield nothing loadable.
+     *
+     * <p>Falls back to {@code pluginDir}'s own directory name when the manifest declares no
+     * {@code pluginId} — correct for {@code plugins/<plugin-id>/}, where the directory name
+     * genuinely is the id. See {@link #load(Path, PluginManifest, String)} for the cache-directory
+     * case, where it is not.
      */
     public PluginDescriptor load(Path pluginDir, PluginManifest manifest) {
-        String dirName = pluginDir.getFileName().toString();
-        String pluginId = orDefault(manifest.getPluginId(), dirName);
+        return load(pluginDir, manifest, pluginDir.getFileName().toString());
+    }
+
+    /**
+     * Same as {@link #load(Path, PluginManifest)}, but with an explicit fallback id instead of
+     * deriving one from {@code pluginDir}'s own name. Needed for
+     * {@code cache/<plugin-id>/<hash>/} directories (see {@code PluginCacheInstaller} /
+     * {@code DefaultPluginManager#loadSinglePluginDirectory}) — the hash-named leaf directory is
+     * not a meaningful plugin id, so callers there pass the parent directory's name (the real
+     * plugin id) instead. Using the hash as a silent fallback used to register a plugin under the
+     * wrong id whenever its manifest didn't declare {@code pluginId} explicitly (Claude Code's
+     * {@code plugin.json} commonly only has {@code name}, not {@code pluginId}) — confirmed via
+     * harness-testbed: {@code /plugin disable} silently no-op'd because it was toggling a
+     * different id than the one actually registered.
+     */
+    public PluginDescriptor load(Path pluginDir, PluginManifest manifest, String idFallback) {
+        String pluginId = orDefault(manifest.getPluginId(), idFallback);
         String name = orDefault(manifest.getName(), pluginId);
         String version = orDefault(manifest.getVersion(), "1.0");
         String description = orDefault(manifest.getDescription(), "");
