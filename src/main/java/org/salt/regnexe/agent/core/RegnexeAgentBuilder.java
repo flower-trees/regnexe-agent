@@ -126,6 +126,14 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withSessionBufferSize(maxSize);
     }
 
+    /**
+     * Trigger threshold for the default session-memory compaction strategy
+     * ({@code PeriodicConversationSummaryMemory}) — see {@code Builder#withSessionCompactPeriod}.
+     */
+    public Builder withSessionCompactPeriod(int period) {
+        return new Builder(flowEngine, chainActor).withSessionCompactPeriod(period);
+    }
+
     public Builder withAgentContext(AgentContext context) {
         return new Builder(flowEngine, chainActor).withAgentContext(context);
     }
@@ -206,12 +214,17 @@ public class RegnexeAgentBuilder {
         private AgentEventListener eventListener;
         private ConversationStorage sessionStorage;
         private int sessionBufferSize = 10;
+        private int sessionCompactPeriod = 20;
         private AgentContext agentContext;
         private int maxAgentIterations = 20;
         private int maxContextOutputChars = 2000;
         private boolean verbose = false;
         private ConversationMemory sessionMemory;
         private java.nio.file.Path claudeCompatWorkspace;
+        private String projectMemory;
+        // Names of tools registered via withTool() — see ContextBusKeys.BASE_TOOL_NAMES javadoc.
+        // LinkedHashSet: dedupes across repeated/varargs withTool() calls while keeping registration order.
+        private final java.util.Set<String> baseToolNames = new java.util.LinkedHashSet<>();
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -279,6 +292,21 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /**
+         * Trigger threshold for the default session-memory compaction strategy
+         * ({@code PeriodicConversationSummaryMemory}, used when no explicit
+         * {@link #withSessionMemory} is set) — once the raw-turn buffer reaches this many
+         * turns, they're compressed into the rolling summary in one LLM call and the buffer
+         * clears. Default 20 — batching the compaction like this means far fewer summarization
+         * calls on long sessions than compressing one turn every time the buffer overflows. Has
+         * no effect if {@link #withSessionMemory} is set explicitly — that strategy's own trigger
+         * rule (if any) takes over.
+         */
+        public Builder withSessionCompactPeriod(int period) {
+            this.sessionCompactPeriod = period;
+            return this;
+        }
+
         public Builder withAgentContext(AgentContext context) {
             this.agentContext = context;
             return this;
@@ -310,6 +338,18 @@ public class RegnexeAgentBuilder {
          */
         public Builder withClaudeCompatWorkspace(java.nio.file.Path workspace) {
             this.claudeCompatWorkspace = workspace;
+            return this;
+        }
+
+        /**
+         * Long-term project memory (REX.md-style content) — always present once set, regardless
+         * of sessionId, independent of the three memory layers (Session/Task/AgentContext). Read
+         * by both {@link TaskPlanner} and {@link CapabilityExecutor}. Typically the caller
+         * concatenates a user-scope and a project-scope file before passing it in; this builder
+         * doesn't read any files itself.
+         */
+        public Builder withProjectMemory(String content) {
+            this.projectMemory = content;
             return this;
         }
 
@@ -405,12 +445,13 @@ public class RegnexeAgentBuilder {
         /**
          * Applies each scope's {@code enabled.yml} on top of whatever has been installed so far,
          * lowest-priority layer first (a later layer's key wins — see {@code ScopeResolver}).
-         * {@code enabled.yml} keys are {@code <plugin-id>@<marketplace-name>} (§3.2), but
+         * {@code enabled.yml} keys are {@code <plugin-id>@<marketplace-name>}, but
          * {@link Marketplace#enable}/{@link Marketplace#disable} only key on pluginId — regnexe
-         * doesn't namespace its registry by marketplace (a deliberate simplification, see the
-         * design doc's "Scope-creep self-correction" note), so the {@code @marketplace} suffix is
-         * stripped here. A no-op if no marketplace has been populated yet (nothing to enable/
-         * disable). {@code enabledYmlByScope} entries with a null path are skipped.
+         * doesn't namespace its registry by marketplace (a deliberate simplification: two plugins
+         * with the same id in different marketplaces are treated as the same plugin), so the
+         * {@code @marketplace} suffix is stripped here. A no-op if no marketplace has been
+         * populated yet (nothing to enable/disable). {@code enabledYmlByScope} entries with a
+         * null path are skipped.
          */
         public Builder withEnabledState(Map<Scope, java.nio.file.Path> enabledYmlByScope, List<Scope> priorityOrder) {
             if (this.marketplace == null) {
@@ -436,7 +477,13 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
-        /** Convenience: register one or more pre-built Tool objects directly as MCP_TOOL capabilities. */
+        /**
+         * Convenience: register one or more pre-built Tool objects directly as MCP_TOOL
+         * capabilities. Their names are tracked as "base tools" (see
+         * {@code ContextBusKeys.BASE_TOOL_NAMES}) — every selected SKILL capability
+         * unconditionally gets access to them, regardless of the skill's own allowedTools
+         * declaration or whether the Planner separately selected them this round.
+         */
         public Builder withTool(Tool... tools) {
             if (this.marketplace == null) {
                 this.marketplace = new SimpleMarketplace();
@@ -444,6 +491,7 @@ public class RegnexeAgentBuilder {
             DefaultPluginManager mgr = new DefaultPluginManager();
             for (Tool tool : tools) {
                 mgr.registerTool(tool);
+                this.baseToolNames.add(tool.getName());
             }
             this.marketplace.load(mgr);
             return this;
@@ -510,12 +558,15 @@ public class RegnexeAgentBuilder {
                     new TokenAggregatingEventListener(eventListener != null ? eventListener : AgentEventListener.NO_OP),
                     sessionStorage != null ? sessionStorage : new InMemoryConversationStorage(),
                     sessionBufferSize,
+                    sessionCompactPeriod,
                     agentContext != null ? agentContext : FullContext.build(),
                     maxAgentIterations,
                     maxContextOutputChars,
                     verbose,
                     sessionMemory,
-                    claudeCompatWorkspace
+                    claudeCompatWorkspace,
+                    projectMemory,
+                    baseToolNames
             );
         }
     }

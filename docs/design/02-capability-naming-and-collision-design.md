@@ -2,7 +2,7 @@
 
 - 状态：**第四节 1-3 已实现并在 `harness-testbed` 上用真实场景验证过**——见文末"实现记录"
 - 涉及仓库：`regnexe-agent`（`marketplace.loader`/`marketplace.capability`/`marketplace.SimpleMarketplace`）、`regnexe-cli`（`CliMain` 的 `/plugin` 命令、`resolveSkillDirectories`）
-- 关联文档：`docs/design/01-marketplace-plugin-design.md`（marketplace/plugin 目录与包结构设计——本文档建立在它已实现的基础上）；`harness-testbed/cases/002-plugin-lifecycle/results.md`（本次发现的直接触发点）
+- 关联文档：`docs/design/01-marketplace-plugin-design.md`（marketplace/plugin 目录与包结构设计——本文档建立在它已实现的基础上）；`harness-testbed/cases/002-plugin-lifecycle/results.md`（本次发现的直接触发点）；`docs/design/03-harness-parity-gap-analysis.md`（本文档 §5 明确不做的几项，在那份差距清单里也有提到）
 - 背景：`docs/design/01-marketplace-plugin-design.md` 第六节 Install/Cache 落地并在 `harness-testbed` 上用真实第三方插件（`claude-md-management`）验证时，连续抓到两个真 bug（`Files.walk` 不解析起点软链接、`cache/<id>/<hash>/` 加载时把哈希目录名当成了 pluginId），两次都是"同一个东西的身份在不同代码路径里算出了不同结果"这一类问题。顺着这个线索系统性地过了一遍四条能力发现路径的命名规则，发现命名/身份唯一性这件事从来没有被当作一个整体设计过——每条路径是不同时间点各自独立写的，命名规则细节不一致，`SimpleMarketplace` 的查重逻辑也有实测出来的真实漏洞。这份文档把现状摊开、把所有冲突场景过一遍、给出这轮要修的东西。
 - 面向读者：下一个要动这部分代码的人或 AI
 

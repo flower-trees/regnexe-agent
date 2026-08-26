@@ -147,6 +147,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         List<HistoryInfos> sessionHistory = bus.getTransmit(ContextBusKeys.SESSION_HISTORY);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
         boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
+        String projectMemory = bus.getTransmit(ContextBusKeys.PROJECT_MEMORY);
 
         String taskId = state.getTaskId();
         int round = state.getCurrentRound();
@@ -182,7 +183,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             FlowInstance flow = buildFlow(chainActor, llm,
                     text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
-            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, resumeMode);
+            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, resumeMode, projectMemory);
             List<BaseMessage> messages = new ArrayList<>(basePrompt.getMessages());
             plan = null;
             String lastRaw = null;
@@ -257,11 +258,18 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
     private ChatPromptValue buildChatPrompt(TaskExecutionState state,
                                             List<CapabilityCandidate> candidates,
                                             List<HistoryInfos> sessionHistory,
-                                            boolean resumeMode) {
+                                            boolean resumeMode,
+                                            String projectMemory) {
         List<BaseMessage> messages = new ArrayList<>();
 
-        // ── System message: SYSTEM_PROMPT + SUMMARY + capabilities ───────────
+        // ── System message: SYSTEM_PROMPT + PROJECT_MEMORY + SUMMARY + capabilities ──
         StringBuilder systemSb = new StringBuilder(SYSTEM_PROMPT);
+
+        // Long-term project memory (REX.md) — always present once configured, independent of
+        // sessionId/history.
+        if (projectMemory != null && !projectMemory.isBlank()) {
+            systemSb.append("\n\n---\n\nProject memory:\n").append(projectMemory);
+        }
 
         if (sessionHistory != null) {
             for (HistoryInfos h : sessionHistory) {

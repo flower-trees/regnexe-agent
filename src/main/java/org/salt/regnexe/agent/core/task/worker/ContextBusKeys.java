@@ -46,6 +46,22 @@ public final class ContextBusKeys {
     public static final String MAX_CONTEXT_OUTPUT_CHARS = "maxContextOutputChars";
     public static final String VERBOSE                 = "verbose";
     public static final String CLAUDE_COMPAT_WORKSPACE = "claudeCompatWorkspace";
+    /**
+     * Long-term project memory (REX.md content). Independent of the three memory layers
+     * (Session/Task/AgentContext): not scoped to a sessionId, always present once configured,
+     * read by both TaskPlanner and CapabilityExecutor.
+     */
+    public static final String PROJECT_MEMORY          = "projectMemory";
+    /**
+     * Names of the "base" tools registered directly via {@code RegnexeAgentBuilder.withTool(...)}
+     * (e.g. regnexe-cli's FileTools/BashTool). Unlike marketplace-discovered capabilities, these
+     * are not subject to per-round Planner selection: a selected SKILL capability always gets
+     * access to all of them, because a Skill shares the main agent's full tool access regardless
+     * of its own {@code allowedTools} declaration — that field only names extra tools to resolve
+     * on top of the base set, it does not restrict access. Set of tool names ({@code Set<String>});
+     * may be absent/empty if no base tools were registered.
+     */
+    public static final String BASE_TOOL_NAMES         = "baseToolNames";
 
     private ContextBusKeys() {}
 }

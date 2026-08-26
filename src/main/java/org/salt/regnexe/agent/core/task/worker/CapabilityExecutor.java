@@ -42,7 +42,11 @@ import org.salt.jlangchain.core.agent.McpAgentExecutor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
-import org.salt.jlangchain.core.skill.Skill;
+import org.salt.jlangchain.core.skill.ReferenceDoc;
+import org.salt.jlangchain.core.skill.ReferencesMode;
+import org.salt.jlangchain.core.skill.ScriptDef;
+import org.salt.jlangchain.core.skill.ScriptTool;
+import org.salt.jlangchain.core.skill.SkillConfig;
 import org.salt.jlangchain.core.subagent.SubAgent;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
@@ -88,6 +92,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         Integer maxAgentIterations = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
         boolean verbose = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.VERBOSE));
         boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
+        String projectMemory = bus.getTransmit(ContextBusKeys.PROJECT_MEMORY);
+        Set<String> baseToolNames = bus.getTransmit(ContextBusKeys.BASE_TOOL_NAMES);
+        if (baseToolNames == null) baseToolNames = Set.of();
 
         BaseChatModel llm = llmProvider.provide(modelSpec);
 
@@ -97,15 +104,20 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         List<ToolExecutionRecord> toolExecutions = new ArrayList<>();
 
         List<Tool> mcpTools = new ArrayList<>();
-        List<Skill> skills = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
+        // Skill instructions merged into this round's shared executor (see resolveCapabilities()
+        // SKILL branch) — one entry per selected skill, folded into agentInput below instead of
+        // a separate systemPrompt slot, since CapabilityExecutor's outer McpAgentExecutor has
+        // none.
+        List<String> skillSystemPrompts = new ArrayList<>();
         // Maps the name a capability is invoked under -> its CapabilityType, so logs can
         // prefix each tool call with "<type>:<name>" (mcp_tool/skill/subagent). Names not
         // present here (e.g. a sub-agent's private own-tools) get no type prefix.
         Map<String, CapabilityType> typeByName = new HashMap<>();
         java.nio.file.Path claudeCompatWorkspace = bus.getTransmit(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE);
-        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skills, subAgents,
-                maxAgentIterations, listener, taskId, round, verbose, toolExecutions, typeByName, claudeCompatWorkspace);
+        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skillSystemPrompts,
+                subAgents, maxAgentIterations, listener, taskId, round, verbose, toolExecutions, typeByName,
+                claudeCompatWorkspace, baseToolNames);
         PlanOutput plan = currentRound(state).getPlan();
         ResultStrategy resultStrategy = resolveResultStrategy(plan);
         boolean returnLastToolResult = resultStrategy == ResultStrategy.RETURN_LAST;
@@ -113,7 +125,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         McpAgentExecutor.Builder executorBuilder = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
                 .tools(mcpTools)
-                .skills(skills)
                 .subAgents(subAgents)
                 .context(agentContext)
                 .onLlm(text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
@@ -138,7 +149,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         this.mcpAgentExecutor = executor;
 
-        String agentInput = buildAgentInput(state, narrative, inputDescs, plan, resultStrategy, resumeMode);
+        String agentInput = buildAgentInput(state, narrative, inputDescs, plan, resultStrategy, resumeMode,
+                projectMemory, skillSystemPrompts);
 
         listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_STARTED,
                 "Selected: " + selectedCapIds + " | Strategy: " + resultStrategy + " | " + agentInput));
@@ -195,8 +207,26 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     }
 
     private String buildAgentInput(TaskExecutionState state, String narrative, Map<String, String> inputDescs,
-                                   PlanOutput plan, ResultStrategy resultStrategy, boolean resumeMode) {
+                                   PlanOutput plan, ResultStrategy resultStrategy, boolean resumeMode,
+                                   String projectMemory, List<String> skillSystemPrompts) {
         StringBuilder sb = new StringBuilder();
+        // Long-term project memory (REX.md) — same content the Planner already saw in its own
+        // system prompt; repeated here so the Execute-phase LLM (a separate call/loop) also has
+        // it, since this agentInput string is its only prompt (CapabilityExecutor's outer
+        // McpAgentExecutor has no separate systemPrompt slot).
+        if (projectMemory != null && !projectMemory.isBlank()) {
+            sb.append("Project memory:\n").append(projectMemory).append("\n\n");
+        }
+        // Selected skills' instructions, merged into this same shared prompt instead of an
+        // isolated executor — each entry already carries its own "### Skill: <name>" heading
+        // (see buildSkillSystemPrompt()) so multiple skills stay distinguishable when several
+        // are selected in the same round.
+        if (skillSystemPrompts != null && !skillSystemPrompts.isEmpty()) {
+            sb.append("Skill instructions:\n");
+            for (String skillPrompt : skillSystemPrompts) {
+                sb.append(skillPrompt).append("\n\n");
+            }
+        }
         String goal = state.getRequest().getGoal();
         if (goal != null && !goal.isBlank()) {
             sb.append("Original goal:\n").append(goal).append("\n\n");
@@ -237,19 +267,43 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     }
 
     /**
-     * Separates selected capabilities into MCP tools, Skills, and SubAgents.
-     * Also resolves each skill/subagent's allowedTools from the marketplace and
-     * adds them to mcpTools so McpAgentExecutor.build() can inject them correctly.
+     * Separates selected capabilities into MCP tools and SubAgents, and merges selected
+     * Skills' instructions/scripts directly into this round's shared tool list instead of
+     * spawning an isolated executor per skill. Also resolves each skill/subagent's declared
+     * allowedTools from the marketplace and adds them to mcpTools so the shared executor can
+     * call them directly.
+     *
+     * <p>Skill tool access vs SubAgent tool access is deliberately asymmetric. A Skill shares the
+     * main agent's full tool access because it runs in the same context — its own
+     * {@code allowedTools} only names extra, skill-specific tools to resolve on top of that, it
+     * does not restrict what the skill can otherwise reach. A SubAgent is the opposite — a real
+     * isolation boundary, scoped to exactly its own tools plus explicitly allowed-listed parent
+     * tools (see {@code SubAgent.collectTools()} in j-langchain: {@code ownTools + inheritedTools},
+     * nothing implicit — already correct, unchanged here). So every selected SKILL unconditionally
+     * gets {@code baseToolNames} (the tools registered directly on the agent builder, always
+     * available regardless of what any single round selects) regardless of its own allowedTools
+     * declaration; SUB_AGENT does not.
      */
     private void resolveCapabilities(Marketplace marketplace, List<String> capIds,
                                      ChainActor chainActor, BaseChatModel llm, ModelProvider llmProvider,
-                                     List<Tool> mcpTools, List<Skill> skills, List<SubAgent> subAgents,
+                                     List<Tool> mcpTools, List<String> skillSystemPrompts, List<SubAgent> subAgents,
                                      Integer maxIterations,
                                      AgentEventListener listener, String taskId, int round, boolean verbose,
                                      List<ToolExecutionRecord> toolExecutions,
                                      Map<String, CapabilityType> typeByName,
-                                     java.nio.file.Path claudeCompatWorkspace) {
+                                     java.nio.file.Path claudeCompatWorkspace,
+                                     Set<String> baseToolNames) {
         if (marketplace == null || capIds == null) return;
+
+        // Tracks tool names already present in mcpTools (from MCP_TOOL selections, skill
+        // scripts, or lazy-reference read tools) so later additions — script tools and the
+        // allowedTools reconciliation pass below — don't register a name twice.
+        Set<String> existingToolNames = new HashSet<>();
+        // Tool names to resolve from the marketplace and add to mcpTools once, after the main
+        // loop: every selected skill's own declared allowedTools (extension tools specific to
+        // that skill, e.g. a plugin's own MCP_TOOL) PLUS baseToolNames (unconditional — see class
+        // javadoc above), merged with subAgents' allowedTools below into one reconciliation pass.
+        Set<String> skillGrantedToolNames = new HashSet<>();
 
         Set<String> seenCapIds = new HashSet<>();
         for (String capId : capIds) {
@@ -262,38 +316,44 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             switch (cap.getType()) {
                 case MCP_TOOL -> {
                     mcpTools.add(cap.getTool());
-                    if (cap.getTool() != null) typeByName.put(cap.getTool().getName(), CapabilityType.MCP_TOOL);
+                    if (cap.getTool() != null) {
+                        existingToolNames.add(cap.getTool().getName());
+                        typeByName.put(cap.getTool().getName(), CapabilityType.MCP_TOOL);
+                    }
                 }
                 case SKILL -> {
                     if (cap.getSkillConfig() != null) {
                         typeByName.put(cap.getName(), CapabilityType.SKILL);
-                        Skill.Builder sb = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
-                        if (claudeCompatWorkspace != null) {
-                            sb.claudeCompatWorkspace(claudeCompatWorkspace);
+                        SkillConfig skillConfig = cap.getSkillConfig();
+                        skillSystemPrompts.add(buildSkillSystemPrompt(cap.getName(), skillConfig));
+
+                        if (skillConfig.getScripts() != null) {
+                            for (ScriptDef def : skillConfig.getScripts()) {
+                                Tool scriptTool = ScriptTool.from(def);
+                                if (existingToolNames.add(scriptTool.getName())) {
+                                    mcpTools.add(scriptTool);
+                                }
+                            }
                         }
-                        if (verbose) {
-                            sb.verbose(true);
-                        } else {
-                            String name = cap.getName();
-                            String scope = "[" + typeLabel(CapabilityType.SKILL) + ":" + name + "]";
-                            AtomicReference<String> skillToolCall = new AtomicReference<>();
-                            sb.onLlm(text -> listener.dispatch(
-                                AgentEvent.of(taskId, round, EventType.SKILL_LLM_RESPONDED,
-                                              scope + " " + text)));
-                            sb.onToolCall(tc -> {
-                                skillToolCall.set(tc);
-                                listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
-                                        labelToolCall(scope, tc, typeByName)));
-                            });
-                            sb.onObservation(obs -> listener.dispatch(
-                                AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                                              formatObservedToolResult(toolExecutions, round, scope, skillToolCall.get(), obs, typeByName))));
+                        if (hasLazyReferences(skillConfig)) {
+                            Tool readRefTool = buildReadReferenceTool(cap.getName(), skillConfig);
+                            if (existingToolNames.add(readRefTool.getName())) {
+                                mcpTools.add(readRefTool);
+                            }
                         }
-                        String skillCapName = cap.getName();
-                        sb.onTokenUsage(u -> listener.dispatch(
-                            AgentEvent.ofCapabilityTokenUsage(taskId, round, skillCapName, u)));
-                        if (maxIterations != null) sb.maxIterations(maxIterations);
-                        skills.add(sb.build());
+                        // Unconditional: a Skill always shares the main agent's base tool access,
+                        // regardless of its own allowedTools declaration. The
+                        // claudeCompatMode/SkillWorkspaceTools sandbox is deliberately not used on
+                        // this path.
+                        skillGrantedToolNames.addAll(baseToolNames);
+                        List<String> declaredAllowed = skillConfig.getAllowedTools();
+                        if (declaredAllowed != null && !declaredAllowed.isEmpty()) {
+                            // Additional named extension tools this skill needs beyond the base set
+                            // (e.g. a plugin's own MCP_TOOL like analyze_clause) — resolved by name
+                            // from the marketplace and added to mcpTools below, same mechanism as
+                            // baseToolNames.
+                            skillGrantedToolNames.addAll(declaredAllowed);
+                        }
                     }
                 }
                 case SUB_AGENT -> {
@@ -341,30 +401,100 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                         subAgents.add(ab.build());
                     } else if (cap.getTool() != null) {
                         mcpTools.add(cap.getTool());
+                        existingToolNames.add(cap.getTool().getName());
                     }
                 }
             }
         }
 
-        // Ensure each skill/subagent's allowedTools are present in mcpTools so that
-        // McpAgentExecutor.build() can inject inherited tools correctly.
-        Set<String> existingNames = new HashSet<>();
-        mcpTools.forEach(t -> existingNames.add(t.getName()));
-
-        Set<String> allAllowed = new HashSet<>();
-        skills.forEach(s -> allAllowed.addAll(s.getAllowedTools()));
+        // Ensure each skill's granted tools (base tools + its own declared allowedTools) and each
+        // subagent's allowedTools are present in mcpTools so the shared executor (skills) /
+        // McpAgentExecutor.build() (subagents) can call/inject them correctly.
+        Set<String> allAllowed = new HashSet<>(skillGrantedToolNames);
         subAgents.forEach(a -> allAllowed.addAll(a.getAllowedTools()));
 
         for (String toolName : allAllowed) {
-            if (existingNames.contains(toolName)) continue;
+            if (existingToolNames.contains(toolName)) continue;
             CapabilityDescriptor dep = marketplace.resolveDescriptor(toolName);
             if (dep != null && dep.getType() == CapabilityType.MCP_TOOL
                     && dep.getTool() != null) {
                 mcpTools.add(dep.getTool());
-                existingNames.add(toolName);
+                existingToolNames.add(toolName);
                 typeByName.put(dep.getTool().getName(), CapabilityType.MCP_TOOL);
             }
         }
+    }
+
+    /**
+     * Builds one Skill's system-prompt-equivalent text for the shared executor: the skill's own
+     * {@code systemPrompt} plus its references (INLINE mode: full content concatenated; LAZY
+     * mode: filename+summary manifest, paired with the read_reference tool from
+     * {@link #buildReadReferenceTool}). Deliberately duplicates the relevant slice of
+     * {@code Skill.buildSystemPrompt()} (j-langchain) rather than widening that method's
+     * visibility, since that class's internals should stay untouched. Prefixed with a
+     * "### Skill: &lt;name&gt;" heading so multiple skills selected in the same round stay
+     * distinguishable in the merged prompt.
+     */
+    private String buildSkillSystemPrompt(String skillName, SkillConfig config) {
+        StringBuilder sb = new StringBuilder("### Skill: ").append(skillName).append("\n");
+        if (config.getSystemPrompt() != null && !config.getSystemPrompt().isBlank()) {
+            sb.append(config.getSystemPrompt());
+        }
+        List<ReferenceDoc> refs = config.getReferences();
+        if (refs != null && !refs.isEmpty()) {
+            sb.append("\n\n---\n\n");
+            if (config.getReferencesMode() == ReferencesMode.LAZY) {
+                sb.append("Available reference documents (read on demand via read_reference_")
+                        .append(skillName).append("):\n");
+                for (ReferenceDoc ref : refs) {
+                    sb.append("- ").append(ref.filename());
+                    if (ref.summary() != null && !ref.summary().isBlank()) {
+                        sb.append(": ").append(ref.summary());
+                    }
+                    sb.append("\n");
+                }
+            } else {
+                for (int i = 0; i < refs.size(); i++) {
+                    if (i > 0) sb.append("\n\n---\n\n");
+                    sb.append(refs.get(i).content());
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    private boolean hasLazyReferences(SkillConfig config) {
+        return config.getReferencesMode() == ReferencesMode.LAZY
+                && config.getReferences() != null && !config.getReferences().isEmpty();
+    }
+
+    /**
+     * Mirrors {@code Skill.buildReadReferenceTool()} (j-langchain, package-private) — duplicated
+     * here for the same reason as {@link #buildSkillSystemPrompt}. Tool name is namespaced with
+     * the skill name so multiple lazy-reference skills selected in the same round don't collide.
+     */
+    private Tool buildReadReferenceTool(String skillName, SkillConfig config) {
+        Map<String, String> byFilename = new HashMap<>();
+        for (ReferenceDoc ref : config.getReferences()) {
+            byFilename.putIfAbsent(ref.filename(), ref.content());
+        }
+        return Tool.builder()
+                .name("read_reference_" + skillName)
+                .description("Read the full content of a '" + skillName + "' skill reference document by filename. "
+                        + "Available files: " + String.join(", ", byFilename.keySet()))
+                .params("file: String")
+                .func(raw -> {
+                    String file = argString(raw, "file");
+                    String content = byFilename.get(file);
+                    return content != null ? content : "Error: reference not found: " + file;
+                })
+                .build();
+    }
+
+    private static String argString(Object raw, String key) {
+        if (!(raw instanceof Map<?, ?> map)) return "";
+        Object v = map.get(key);
+        return v != null ? v.toString().trim() : "";
     }
 
     /** Renders a CapabilityType as its log prefix: mcp_tool / skill / subagent. */

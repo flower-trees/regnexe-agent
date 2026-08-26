@@ -43,8 +43,8 @@ import org.salt.jlangchain.core.agent.memory.AgentContext;
 import org.salt.regnexe.agent.core.common.util.TextCompressor;
 import org.salt.jlangchain.core.history.HistoryInfos;
 import org.salt.jlangchain.core.history.memory.ConversationMemory;
-import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemory;
-import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemoryReader;
+import org.salt.jlangchain.core.history.memory.periodic.PeriodicConversationSummaryMemory;
+import org.salt.jlangchain.core.history.memory.periodic.PeriodicConversationSummaryMemoryReader;
 import org.salt.jlangchain.core.history.storage.ConversationStorage;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
@@ -86,12 +86,15 @@ public class RegnexeAgent {
     private final AgentEventListener eventListener;
     private final ConversationStorage sessionStorage;
     private final int sessionBufferSize;
+    private final int sessionCompactPeriod;
     private final AgentContext agentContext;
     private final int maxAgentIterations;
     private final int maxContextOutputChars;
     private final boolean verbose;
     private final ConversationMemory sessionMemory;
     private final Path claudeCompatWorkspace;
+    private final String projectMemory;
+    private final java.util.Set<String> baseToolNames;
 
     /** Set at the start of each execute()/resume(); checked by pause(). */
     private volatile AtomicBoolean activeStopSignal;
@@ -111,12 +114,15 @@ public class RegnexeAgent {
                 AgentEventListener eventListener,
                 ConversationStorage sessionStorage,
                 int sessionBufferSize,
+                int sessionCompactPeriod,
                 AgentContext agentContext,
                 int maxAgentIterations,
                 int maxContextOutputChars,
                 boolean verbose,
                 ConversationMemory sessionMemory,
-                Path claudeCompatWorkspace) {
+                Path claudeCompatWorkspace,
+                String projectMemory,
+                java.util.Set<String> baseToolNames) {
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -132,12 +138,15 @@ public class RegnexeAgent {
         this.eventListener = eventListener;
         this.sessionStorage = sessionStorage;
         this.sessionBufferSize = sessionBufferSize;
+        this.sessionCompactPeriod = sessionCompactPeriod;
         this.agentContext = agentContext;
         this.maxAgentIterations = maxAgentIterations;
         this.maxContextOutputChars = maxContextOutputChars;
         this.verbose = verbose;
         this.sessionMemory = sessionMemory;
         this.claudeCompatWorkspace = claudeCompatWorkspace;
+        this.projectMemory = projectMemory;
+        this.baseToolNames = baseToolNames != null ? baseToolNames : java.util.Set.of();
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -391,6 +400,12 @@ public class RegnexeAgent {
         if (claudeCompatWorkspace != null) {
             map.put(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE, claudeCompatWorkspace);
         }
+        if (projectMemory != null && !projectMemory.isBlank()) {
+            map.put(ContextBusKeys.PROJECT_MEMORY, projectMemory);
+        }
+        if (!baseToolNames.isEmpty()) {
+            map.put(ContextBusKeys.BASE_TOOL_NAMES, baseToolNames);
+        }
         return map;
     }
 
@@ -419,7 +434,7 @@ public class RegnexeAgent {
             history = sessionMemory.readHistory();
         } else if (sessionStorage != null) {
             long longId = (long) sessionId.hashCode();
-            history = ConversationSummaryBufferMemoryReader.builder()
+            history = PeriodicConversationSummaryMemoryReader.builder()
                     .appId(0L).userId(0L).sessionId(longId).storage(sessionStorage).build()
                     .readHistory();
         } else {
@@ -442,9 +457,13 @@ public class RegnexeAgent {
                 return;
             }
             long longId = (long) sessionId.hashCode();
-            memory = ConversationSummaryBufferMemory.builder()
+            // Periodic (batch) compaction by default: compresses a whole batch of rounds at
+            // once when the buffer fills, instead of one round every time it overflows — far
+            // fewer summarization LLM calls on long sessions than the old rolling strategy
+            // (ConversationSummaryBufferMemory, still available via explicit withSessionMemory).
+            memory = PeriodicConversationSummaryMemory.builder()
                     .appId(0L).userId(0L).sessionId(longId)
-                    .maxSize(sessionBufferSize)
+                    .maxSize(sessionCompactPeriod)
                     .storage(sessionStorage)
                     .llm(llmProvider.provide(defaultModel))
                     .build();

@@ -46,9 +46,9 @@ import java.util.stream.Stream;
  *         └── &lt;hash&gt;/           ← SHA-256 of source content, first 12 hex chars
  * </pre>
  *
- * <p>Only local paths are supported — no remote fetch (§6.1). Install is content-addressed and
+ * <p>Only local paths are supported — no remote fetch. Install is content-addressed and
  * therefore idempotent: re-installing identical content is a no-op beyond refreshing
- * {@code CURRENT}. Uninstall is immediate and total (§6.4) — no grace period, no orphan retention.
+ * {@code CURRENT}. Uninstall is immediate and total — no grace period, no orphan retention.
  */
 @Slf4j
 public class PluginCacheInstaller {
@@ -112,7 +112,7 @@ public class PluginCacheInstaller {
 
     /**
      * Deletes {@code marketplaceRoot/cache/<pluginId>/} entirely — {@code CURRENT} and every
-     * historical hash version, no grace period (§6.4). Returns {@code false} (not an error) when
+     * historical hash version, no grace period. Returns {@code false} (not an error) when
      * nothing was installed under that id. Never touches {@code plugins/}.
      */
     public boolean uninstall(Path marketplaceRoot, String pluginId) {
