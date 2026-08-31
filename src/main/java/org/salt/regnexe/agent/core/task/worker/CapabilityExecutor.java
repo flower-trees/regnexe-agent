@@ -119,6 +119,22 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skillSystemPrompts,
                 subAgents, maxAgentIterations, maxConsecutiveToolFailures, listener, taskId, round, verbose,
                 toolExecutions, typeByName, claudeCompatWorkspace, baseToolNames);
+
+        // Best-effort attribution for the shared loop's tool-call log: unlike a SubAgent (its own
+        // isolated executor, so its onToolCall callback naturally knows its own scope), a Skill
+        // selected here shares this one loop and tool list with everything else picked this round
+        // — there is no signal for "which skill's instructions motivated this specific call" when
+        // more than one is selected simultaneously. When exactly one is, though, attributing every
+        // call in the round to it is a reasonable approximation (this is also the overwhelmingly
+        // common case in practice — most rounds select a single skill). Falls back to no scope
+        // (today's behavior) whenever that assumption doesn't hold.
+        List<String> selectedSkillNames = typeByName.entrySet().stream()
+                .filter(e -> e.getValue() == CapabilityType.SKILL)
+                .map(Map.Entry::getKey)
+                .toList();
+        String sharedLoopScope = selectedSkillNames.size() == 1
+                ? "[skill:" + selectedSkillNames.get(0) + "]" : null;
+
         PlanOutput plan = currentRound(state).getPlan();
         ResultStrategy resultStrategy = resolveResultStrategy(plan);
         boolean returnLastToolResult = resultStrategy == ResultStrategy.RETURN_LAST;
@@ -132,11 +148,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .onToolCall(tc -> {
                     outerToolCall.set(tc);
                     listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
-                            labelToolCall(null, tc, typeByName)));
+                            labelToolCall(sharedLoopScope, tc, typeByName)));
                 })
                 .onObservation(obs -> {
                     state.setLastToolResult(obs);
-                    String label = formatToolCallLabel(null, outerToolCall.get(), typeByName);
+                    String label = formatToolCallLabel(sharedLoopScope, outerToolCall.get(), typeByName);
                     recordToolExecution(toolExecutions, round, label, outerToolCall.get(), obs);
                     listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
                             formatToolResult(label, obs)));
@@ -167,35 +183,49 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                     : result.getText();
             output.setFinalText(executionText);
             output.setStatus(ExecutionStatus.SUCCESS);
-            bus.putTransmit(ContextBusKeys.EXEC_TEXT, executionText);
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
                     "SUCCESS | " + executionText));
             log.debug("Round {}: execution succeeded", state.getCurrentRound());
         } catch (AgentStoppedException e) {
-            output.setFinalText(state.getLastToolResult());
+            output.setFinalText(state.getLastToolResult() != null
+                    ? state.getLastToolResult() : "Paused before any tool result was produced.");
             output.setStatus(ExecutionStatus.STOPPED);
             state.setStatus(TaskStatus.PAUSED);
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED"));
             log.debug("Round {}: execution paused", state.getCurrentRound());
         } catch (AgentAbortException e) {
             output.setStatus(ExecutionStatus.FAILED);
-            String lastResult = state.getLastToolResult();
-            output.setFinalText(lastResult != null
-                    ? "Incomplete (" + e.getMessage() + "). Last known result: " + lastResult
-                    : e.getMessage());
+            // Deliberately NOT the rich "Incomplete(...) Last known result: ..." text this used to
+            // be: that diagnostic detail (with j-langchain's own 120-char-truncated tool-call
+            // trailer baked into e.getMessage()) is no longer what downstream planning reads — see
+            // docs/design/08-round-handoff-redesign.md. This round's Reflector call builds
+            // roundSummary from the full, untruncated tool_executions list instead, which is what
+            // the next round's Planner now reads. finalText only needs to be a short, honest marker
+            // for whatever ends up showing this round's raw text (e.g. DefaultResultComposer's
+            // last-resort fallback when no round ever produced a roundSummary either). The rich
+            // e.getMessage() text still reaches the live event log two lines below, unchanged —
+            // that's a different audience (a human watching in real time) with different needs.
+            output.setFinalText("Round " + round + " incomplete: iteration budget ("
+                    + (maxAgentIterations != null ? maxAgentIterations : "?") + " steps) exceeded.");
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
                     "FAILED | " + e.getMessage()));
             log.warn("Round {}: execution aborted: {}", state.getCurrentRound(), e.getMessage());
         } catch (Exception e) {
             output.setStatus(ExecutionStatus.FAILED);
-            output.setFinalText(e.getMessage());
-            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
-                    "FAILED | " + e.getMessage()));
-            log.warn("Round {}: execution failed: {}", state.getCurrentRound(), e.getMessage());
+            String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName() + " (no message)";
+            output.setFinalText(msg);
+            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "FAILED | " + msg));
+            log.warn("Round {}: execution failed: {}", state.getCurrentRound(), msg);
         } finally {
             this.mcpAgentExecutor = null;
         }
         output.setToolExecutions(new ArrayList<>(toolExecutions));
+
+        // Unconditional — success or failure — so Reflector never reads a stale value left over
+        // from an earlier round (previously this was only set in the success branch; see the
+        // design doc). Reflector's own judgment now primarily reads the full tool_executions list
+        // rather than this single string, but it's kept as a cheap, always-consistent fallback.
+        bus.putTransmit(ContextBusKeys.EXEC_TEXT, output.getFinalText());
 
         currentRound(state).setExecutionResult(output);
         state.setUpdatedAt(System.currentTimeMillis());

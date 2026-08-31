@@ -180,13 +180,23 @@ public class RegnexeAgent {
         return runLoop(state, sessionHistory, false);
     }
 
-    /**
-     * Resume the most recently paused task for the given session.
-     * The supplement input is appended to the original request so Planner can see
-     * both the original goal and the new context in separate prompt sections.
-     */
+    /** Equivalent to {@link #resume(String, String, boolean)} with {@code force=false}. */
     public AgentResult resume(String sessionId, String supplementInput) {
-        List<TaskExecutionState> resumable = taskStore.listResumable(sessionId);
+        return resume(sessionId, supplementInput, false);
+    }
+
+    /**
+     * Resume the most recently paused (or, with {@code force}, FAILED) task for the given
+     * session. The supplement input is appended to the original request so Planner can see both
+     * the original goal and the new context in separate prompt sections.
+     *
+     * @param force also consider a FAILED task resumable — see {@code TaskStore.listResumable}'s
+     *              javadoc for when this is appropriate (the underlying cause has been fixed
+     *              since, e.g. a billing/vendor-config change) vs. not (a real bug — retrying
+     *              blindly just burns the same error again).
+     */
+    public AgentResult resume(String sessionId, String supplementInput, boolean force) {
+        List<TaskExecutionState> resumable = taskStore.listResumable(sessionId, force);
         if (resumable.isEmpty()) {
             throw new IllegalStateException("No resumable task found for session: " + sessionId);
         }

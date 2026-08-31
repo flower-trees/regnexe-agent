@@ -102,6 +102,10 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model);
     }
 
+    public Builder withDefaultModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+        return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model, kwargs);
+    }
+
     public Builder withDefaultModel(Vendor vendor, String model) {
         return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model);
     }
@@ -249,6 +253,14 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /** Same as {@link #withDefaultModel(String, String)}, plus vendor-specific extra request
+         * params (e.g. {@code Map.of("thinking", Map.of("type", "disabled"))}) — see
+         * {@link ModelSpec#of(String, String, java.util.Map)}'s javadoc. */
+        public Builder withDefaultModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+            this.defaultModel = ModelSpec.of(vendor, model, kwargs);
+            return this;
+        }
+
         public Builder withDefaultModel(Vendor vendor, String model) {
             this.defaultModel = ModelSpec.of(vendor, model);
             return this;
@@ -273,6 +285,12 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /** Same as {@link #withPlannerModel(String, String)}, plus vendor-specific extra request params. */
+        public Builder withPlannerModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+            this.plannerModel = ModelSpec.of(vendor, model, kwargs);
+            return this;
+        }
+
         /**
          * Optional per-role override: run Reflector's FINISH/CONTINUE/ESCALATE judgment on a
          * different model than Execute. Unset means Reflector uses the default model too — see
@@ -282,6 +300,12 @@ public class RegnexeAgentBuilder {
          */
         public Builder withReflectorModel(String vendor, String model) {
             this.reflectorModel = ModelSpec.of(vendor, model);
+            return this;
+        }
+
+        /** Same as {@link #withReflectorModel(String, String)}, plus vendor-specific extra request params. */
+        public Builder withReflectorModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+            this.reflectorModel = ModelSpec.of(vendor, model, kwargs);
             return this;
         }
 

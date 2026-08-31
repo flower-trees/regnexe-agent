@@ -41,10 +41,11 @@ public class InMemoryTaskStore implements TaskStore {
     }
 
     @Override
-    public List<TaskExecutionState> listResumable(String sessionId) {
+    public List<TaskExecutionState> listResumable(String sessionId, boolean includeFailed) {
         return store.values().stream()
                 .filter(s -> sessionId.equals(s.getSessionId())
-                          && s.getStatus() == TaskStatus.PAUSED)
+                          && (s.getStatus() == TaskStatus.PAUSED
+                              || (includeFailed && s.getStatus() == TaskStatus.FAILED)))
                 .toList();
     }
 

@@ -31,4 +31,16 @@ public class ReflectionDecision {
      * Guidance for the next round; null when action is FINISH or ESCALATE
      */
     private ReflectionHint hintForNext;
+
+    /**
+     * Structured hand-off summary for the next round's Planner — what this round actually
+     * accomplished, what failed and why, what's left. See docs/design/08-round-handoff-redesign.md.
+     *
+     * <p>Deliberately separate from {@code ExecutionOutput.finalText}: that field is Execute's
+     * own (cheaper-model) concise answer to the user's original goal, written under a "be
+     * concise" instruction — a different audience and purpose than a technical hand-off for the
+     * next round's planning. This field is authored by Reflector (the stronger-model role) from
+     * the round's full, untruncated {@code tool_executions}, not from the last tool result alone.
+     */
+    private String roundSummary;
 }

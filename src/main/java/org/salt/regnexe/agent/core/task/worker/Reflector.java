@@ -69,12 +69,23 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
               If the result deviates — e.g. the setting changes, named entities disappear, or required \
               items are replaced wholesale — action should be CONTINUE, not FINISH. Describe the deviation \
               in planAdjustment.
+            - roundSummary is a hand-off note for the NEXT round's planner, not a user-facing answer. \
+              Base it on the full "Tool calls this round" list below, not just the last call. It should \
+              let the next round skip redoing finished work and go straight to fixing what's broken. \
+              Cover three things concisely: (1) concrete artifacts already produced this round — files \
+              written, records committed, research already gathered, with enough specificity (ids, \
+              filenames, search topics already covered) that the next round recognizes it doesn't need \
+              to redo them; (2) if something failed, the SPECIFIC cause (e.g. the exact error type/line, \
+              not just "an error occurred") — this is what lets the next round fix the one broken thing \
+              instead of restarting everything; (3) what concretely remains. Always non-null, even on \
+              FINISH/ESCALATE (a short "what was accomplished" note still has value there).
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
             {
               "action": "FINISH" | "CONTINUE" | "ESCALATE",
               "reason": "<why>",
+              "roundSummary": "<hand-off note for the next round, see rule above>",
               "hintForNext": null | {
                 "requestResearch": false,
                 "searchDirection": null,
@@ -188,6 +199,19 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         sb.append("Execution result:\n");
         sb.append(execText != null ? execText : "(no output)").append("\n\n");
 
+        // Full tool-call list for THIS round (see docs/design/08-round-handoff-redesign.md) — the
+        // basis for roundSummary. Deliberately not the same thing as execText/lastToolResult above:
+        // that's just the single last call; this is every call, so roundSummary can name concrete
+        // artifacts already produced and, on failure, the specific cause rather than "an error
+        // occurred". Data itself (ToolExecutionRecord.observation) is stored untruncated — the cap
+        // here is only about what's worth spending Reflector's own prompt budget on, not a repeat
+        // of j-langchain's 120-char diagnostic-trailer truncation (that one is for the live event
+        // log now, not for this hand-off — see the design doc for why the two must not be conflated).
+        String toolLog = renderToolExecutionsForReflection(exec);
+        if (!toolLog.isEmpty()) {
+            sb.append("Tool calls this round (full list, in order):\n").append(toolLog).append("\n\n");
+        }
+
         List<RoundRecord> rounds = state.getRounds();
         if (rounds.size() > 1) {
             sb.append("This is round ").append(state.getCurrentRound())
@@ -195,6 +219,31 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         }
 
         return sb.toString();
+    }
+
+    private static final int MAX_OBSERVATION_CHARS = 800;
+    private static final int MAX_ARGUMENTS_CHARS = 200;
+
+    private String renderToolExecutionsForReflection(ExecutionOutput exec) {
+        if (exec == null || exec.getToolExecutions() == null || exec.getToolExecutions().isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        int i = 1;
+        for (var record : exec.getToolExecutions()) {
+            sb.append(i++).append(". ").append(record.getToolName() == null ? "unknown" : record.getToolName());
+            String args = record.getArguments();
+            if (args != null && !args.isBlank()) {
+                sb.append('(').append(capText(args, MAX_ARGUMENTS_CHARS)).append(')');
+            }
+            sb.append(" -> ").append(capText(record.getObservation(), MAX_OBSERVATION_CHARS)).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private String capText(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "…(truncated)";
     }
 
     /**
@@ -219,6 +268,9 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             ReflectionDecision decision = new ReflectionDecision();
             decision.setAction(ReflectionAction.CONTINUE);
             decision.setReason("Guard: " + capsCount + " capabilities selected but no tools executed this round");
+            // No LLM call on this path — reuse reason verbatim rather than spending a call just to
+            // rephrase it. Nothing was produced this round, so there's nothing else to report.
+            decision.setRoundSummary(decision.getReason());
             ReflectionHint hint = new ReflectionHint();
             hint.setPlanAdjustment(
                     "No tools ran despite " + capsCount + " capabilities being selected. "
@@ -237,12 +289,18 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             if (decision.getAction() == null) {
                 decision.setAction(ReflectionAction.ESCALATE);
             }
+            if (decision.getRoundSummary() == null || decision.getRoundSummary().isBlank()) {
+                // Model produced valid JSON but skipped the field — never leave it null, the next
+                // round's Planner unconditionally reads it (see TaskPlanner's history section).
+                decision.setRoundSummary(decision.getReason());
+            }
             return decision;
         } catch (Exception e) {
             log.warn("Failed to parse ReflectionDecision, defaulting to ESCALATE: {}", e.getMessage());
             ReflectionDecision fallback = new ReflectionDecision();
             fallback.setAction(ReflectionAction.ESCALATE);
             fallback.setReason("parse error: " + e.getMessage());
+            fallback.setRoundSummary("Reflector output could not be parsed: " + e.getMessage());
             return fallback;
         }
     }
