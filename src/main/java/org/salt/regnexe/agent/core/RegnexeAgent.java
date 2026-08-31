@@ -50,6 +50,7 @@ import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
 import org.salt.jlangchain.core.message.MessageType;
 import org.salt.jlangchain.core.skill.Skill;
+import org.salt.jlangchain.rag.tools.Tool;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -79,6 +80,10 @@ public class RegnexeAgent {
     private final Reflector reflector;
     private final ModelProvider llmProvider;
     private final ModelSpec defaultModel;
+    /** Nullable — TaskPlanner falls back to defaultModel when unset. */
+    private final ModelSpec plannerModel;
+    /** Nullable — Reflector falls back to defaultModel when unset. */
+    private final ModelSpec reflectorModel;
     private final Marketplace marketplace;
     private final TaskStore taskStore;
     private final ResultComposer resultComposer;
@@ -89,6 +94,7 @@ public class RegnexeAgent {
     private final int sessionCompactPeriod;
     private final AgentContext agentContext;
     private final int maxAgentIterations;
+    private final int maxConsecutiveToolFailures;
     private final int maxContextOutputChars;
     private final boolean verbose;
     private final ConversationMemory sessionMemory;
@@ -107,6 +113,8 @@ public class RegnexeAgent {
                 Reflector reflector,
                 ModelProvider llmProvider,
                 ModelSpec defaultModel,
+                ModelSpec plannerModel,
+                ModelSpec reflectorModel,
                 Marketplace marketplace,
                 TaskStore taskStore,
                 ResultComposer resultComposer,
@@ -117,6 +125,7 @@ public class RegnexeAgent {
                 int sessionCompactPeriod,
                 AgentContext agentContext,
                 int maxAgentIterations,
+                int maxConsecutiveToolFailures,
                 int maxContextOutputChars,
                 boolean verbose,
                 ConversationMemory sessionMemory,
@@ -131,6 +140,8 @@ public class RegnexeAgent {
         this.reflector = reflector;
         this.llmProvider = llmProvider;
         this.defaultModel = defaultModel;
+        this.plannerModel = plannerModel;
+        this.reflectorModel = reflectorModel;
         this.marketplace = marketplace;
         this.taskStore = taskStore;
         this.resultComposer = resultComposer;
@@ -141,6 +152,7 @@ public class RegnexeAgent {
         this.sessionCompactPeriod = sessionCompactPeriod;
         this.agentContext = agentContext;
         this.maxAgentIterations = maxAgentIterations;
+        this.maxConsecutiveToolFailures = maxConsecutiveToolFailures;
         this.maxContextOutputChars = maxContextOutputChars;
         this.verbose = verbose;
         this.sessionMemory = sessionMemory;
@@ -247,7 +259,41 @@ public class RegnexeAgent {
                 "Skill: " + capabilityId + " | args: " + args));
 
         Skill.Builder skillBuilder = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
-        if (claudeCompatWorkspace != null) {
+        // executeSkill() otherwise falls back to j-langchain Skill.Builder's own
+        // DEFAULT_MAX_ITERATIONS (10) — a hardcoded budget the CLI's agent.max_agent_iterations
+        // config has never reached. Confirmed for real: robot-article-writing's actual workflow
+        // (query schema, read news-sources.md, cross-check existing articles, research, draft,
+        // upload images, dry-run, commit) burned all 10 just on setup/orientation and got cut
+        // off with "Max iterations (10) reached" before doing any real work. Only apply our
+        // configured budget when the skill's own SKILL.md hasn't deliberately declared a
+        // tighter/looser one — respect explicit skill-author intent over the CLI default.
+        if (cap.getSkillConfig().getMaxIterations() == null) {
+            skillBuilder.maxIterations(maxAgentIterations);
+        }
+        // Resolve the same baseToolNames the Planner-driven path (CapabilityExecutor's SKILL
+        // branch) unconditionally grants every selected skill — see that class's javadoc: "a
+        // Skill shares the main agent's full tool access because it runs in the same context".
+        // Without this, /skill-name direct invocation was the ONE path that did NOT share it:
+        // Skill.from(...) builds a standalone Skill with no parentTools injected, so a skill
+        // whose job requires touching real project files (not just its own .rex/ tree) had no
+        // way to reach them — confirmed for real against robot-article-writing, whose lib/db.py
+        // and lib/upload.py live at the project root, one level above the claudeCompatWorkspace
+        // sandbox: file_exists/list_directory calls for anything outside it threw
+        // "SecurityException: Path escapes workspace", and the LLM had no fallback but to
+        // (incorrectly) write article payloads into the sandbox instead of the real DB.
+        List<Tool> baseTools = baseToolNames.stream()
+                .map(marketplace::resolveDescriptor)
+                .filter(java.util.Objects::nonNull)
+                .map(CapabilityDescriptor::getTool)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (!baseTools.isEmpty()) {
+            // Real tool access supersedes the claudeCompatMode sandbox for this skill: leaving
+            // both active would register two tools named "bash"/"read_file" (SkillWorkspaceTools
+            // uses the same names as FileTools/BashTool), which is at best redundant and at worst
+            // lets the model reach for the sandboxed one when the real one was intended.
+            skillBuilder.claudeCompatMode(false);
+        } else if (claudeCompatWorkspace != null) {
             skillBuilder.claudeCompatWorkspace(claudeCompatWorkspace);
         }
         if (verbose) {
@@ -267,7 +313,11 @@ public class RegnexeAgent {
         String finalText;
         TaskStatus status;
         try {
-            finalText = skillBuilder.build().invoke(args == null ? "" : args);
+            Skill skill = skillBuilder.build();
+            if (!baseTools.isEmpty()) {
+                skill.injectParentTools(baseTools);
+            }
+            finalText = skill.invoke(args == null ? "" : args);
             status = TaskStatus.FINISHED;
         } catch (Exception e) {
             log.warn("executeSkill '{}' failed: {}", capabilityId, e.getMessage());
@@ -386,6 +436,8 @@ public class RegnexeAgent {
         }
         if (defaultModel != null) {
             map.put(ContextBusKeys.DEFAULT_MODEL, defaultModel);
+            if (plannerModel != null) map.put(ContextBusKeys.PLANNER_MODEL, plannerModel);
+            if (reflectorModel != null) map.put(ContextBusKeys.REFLECTOR_MODEL, reflectorModel);
         }
         if (marketplace != null) {
             map.put(ContextBusKeys.MARKETPLACE, marketplace);
@@ -395,6 +447,10 @@ public class RegnexeAgent {
         }
         map.put(ContextBusKeys.RESUME_MODE, resumeMode);
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
+        // Untouched baseline for TaskPlanner to compute each round's override against — see its
+        // own javadoc for why MAX_AGENT_ITERATIONS itself (mutated per round) isn't safe to reuse.
+        map.put(ContextBusKeys.MAX_AGENT_ITERATIONS_DEFAULT, maxAgentIterations);
+        map.put(ContextBusKeys.MAX_CONSECUTIVE_TOOL_FAILURES, maxConsecutiveToolFailures);
         map.put(ContextBusKeys.MAX_CONTEXT_OUTPUT_CHARS, maxContextOutputChars);
         map.put(ContextBusKeys.VERBOSE, verbose);
         if (claudeCompatWorkspace != null) {

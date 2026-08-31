@@ -207,6 +207,8 @@ public class RegnexeAgentBuilder {
         private ModelProvider llmProvider;
         private BaseChatModel directLlm;
         private ModelSpec defaultModel;
+        private ModelSpec plannerModel;
+        private ModelSpec reflectorModel;
         private Marketplace marketplace;
         private TaskStore taskStore;
         private ResultComposer resultComposer;
@@ -217,6 +219,7 @@ public class RegnexeAgentBuilder {
         private int sessionCompactPeriod = 20;
         private AgentContext agentContext;
         private int maxAgentIterations = 20;
+        private int maxConsecutiveToolFailures = 5;
         private int maxContextOutputChars = 2000;
         private boolean verbose = false;
         private ConversationMemory sessionMemory;
@@ -254,6 +257,31 @@ public class RegnexeAgentBuilder {
         public Builder withDefaultModel(BaseChatModel llm) {
             this.directLlm = llm;
             this.defaultModel = ModelSpec.of("_direct_");
+            return this;
+        }
+
+        /**
+         * Optional per-role override: run TaskPlanner's structured-JSON planning call on a
+         * different model than Execute (which stays on {@link #withDefaultModel}). Unset means
+         * Planner uses the default model too — see {@code ContextBusKeys.PLANNER_MODEL}'s javadoc
+         * for why this specific role is a reasonable place to spend more on a stronger model
+         * without the cost scaling the way Execute's would (one small JSON call per round, not a
+         * multi-iteration tool-calling loop).
+         */
+        public Builder withPlannerModel(String vendor, String model) {
+            this.plannerModel = ModelSpec.of(vendor, model);
+            return this;
+        }
+
+        /**
+         * Optional per-role override: run Reflector's FINISH/CONTINUE/ESCALATE judgment on a
+         * different model than Execute. Unset means Reflector uses the default model too — see
+         * {@code ContextBusKeys.REFLECTOR_MODEL}'s javadoc: a wrong FINISH verdict is a one-way
+         * door (the task ends; no later round can catch and correct it), unlike a Planner or
+         * Execute mistake, so judgment quality here has outsized leverage.
+         */
+        public Builder withReflectorModel(String vendor, String model) {
+            this.reflectorModel = ModelSpec.of(vendor, model);
             return this;
         }
 
@@ -314,6 +342,22 @@ public class RegnexeAgentBuilder {
 
         public Builder withMaxAgentIterations(int maxIterations) {
             this.maxAgentIterations = maxIterations;
+            return this;
+        }
+
+        /**
+         * Caps how many tool calls in a row are allowed to fail before the executor aborts the
+         * round with a diagnostic, instead of grinding through the rest of the {@code
+         * maxAgentIterations} budget retrying the same broken thing. Wires j-langchain's
+         * {@code McpAgentExecutor.Builder.maxConsecutiveToolFailures} — previously never set by
+         * regnexe (defaulted to j-langchain's own {@code 0}, which disables the check entirely).
+         * Found via a real Playwright-MCP article-writing test: a genuinely broken external
+         * dependency (an admin login endpoint rejecting real credentials) kept getting retried by
+         * the model turn after turn until the whole run hit {@code maxAgentIterations} instead of
+         * failing fast on that one dependency a few tries in.
+         */
+        public Builder withMaxConsecutiveToolFailures(int maxConsecutiveToolFailures) {
+            this.maxConsecutiveToolFailures = maxConsecutiveToolFailures;
             return this;
         }
 
@@ -551,6 +595,8 @@ public class RegnexeAgentBuilder {
                     new Reflector(),
                     resolvedProvider,
                     defaultModel,
+                    plannerModel,
+                    reflectorModel,
                     resolvedMarketplace,
                     taskStore != null ? taskStore : new InMemoryTaskStore(),
                     resultComposer != null ? resultComposer : new DefaultResultComposer(),
@@ -561,6 +607,7 @@ public class RegnexeAgentBuilder {
                     sessionCompactPeriod,
                     agentContext != null ? agentContext : FullContext.build(),
                     maxAgentIterations,
+                    maxConsecutiveToolFailures,
                     maxContextOutputChars,
                     verbose,
                     sessionMemory,

@@ -16,6 +16,7 @@ package org.salt.regnexe.agent.core.llm;
 
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.llm.aliyun.ChatAliyun;
+import org.salt.jlangchain.core.llm.custom.ChatCustom;
 import org.salt.jlangchain.core.llm.deepseek.ChatDeepseek;
 import org.salt.jlangchain.core.llm.doubao.ChatDoubao;
 import org.salt.jlangchain.core.llm.hunyuan.ChatHunyuan;
@@ -46,6 +47,12 @@ import org.salt.jlangchain.core.llm.zhipu.ChatZhipu;
  *   ernie-                    → qianfan
  *   step-                     → stepfun
  *   glm-                      → zhipu
+ *
+ * "custom" (any OpenAI-Chat-Completions-compatible endpoint not covered above — OpenRouter,
+ * Together, Groq, a self-hosted server, a corporate gateway) has no prefix rule and must be
+ * routed explicitly via {@code vendor: custom}: there is no model-name pattern that reliably
+ * signals "this is some arbitrary compatible endpoint", so guessing it from the model string
+ * would risk misrouting other vendors' models that happen to contain a similar substring.
  */
 public class DefaultModelProvider implements ModelProvider {
 
@@ -63,6 +70,7 @@ public class DefaultModelProvider implements ModelProvider {
     private BaseChatModel byVendor(String vendor, String model) {
         return switch (vendor.toLowerCase()) {
             case "aliyun"   -> ChatAliyun.builder().model(model).build();
+            case "custom"   -> ChatCustom.builder().model(model).build();
             case "deepseek" -> ChatDeepseek.builder().model(model).build();
             case "doubao"   -> ChatDoubao.builder().model(model).build();
             case "hunyuan"  -> ChatHunyuan.builder().model(model).build();

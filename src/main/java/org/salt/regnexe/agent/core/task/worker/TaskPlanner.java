@@ -105,7 +105,11 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
               * Each bash execution (with possible confirmation): ~2 iterations
               * Each sub-agent or skill call: ~5 iterations
               Sum the costs for all planned operations, then add a 25%% buffer. \
-              If the total is <= the default (20), omit the field or set it to null.
+              If the total is <= the default (%s), omit the field or set it to null — but if this \
+              round's plan is simpler than that default suggests, set iterationsHint to your own \
+              lower estimate anyway: it also tightens the budget, not just raises it, so a small \
+              plan gets a small ceiling instead of the full default room to keep going after the \
+              goal is already met.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
@@ -141,13 +145,28 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         }
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
-        ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        // Falls back to DEFAULT_MODEL when no Planner-specific override is configured —
+        // see ContextBusKeys.PLANNER_MODEL's javadoc for why a stronger model here specifically
+        // (vs. Execute) is a reasonable place to spend more.
+        ModelSpec plannerModelSpec = bus.getTransmit(ContextBusKeys.PLANNER_MODEL);
+        ModelSpec modelSpec = plannerModelSpec != null
+                ? plannerModelSpec : bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
         List<CapabilityCandidate> candidates = bus.getTransmit(ContextBusKeys.CANDIDATES);
         List<HistoryInfos> sessionHistory = bus.getTransmit(ContextBusKeys.SESSION_HISTORY);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
         boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
         String projectMemory = bus.getTransmit(ContextBusKeys.PROJECT_MEMORY);
+        // The untouched original config value — NOT MAX_AGENT_ITERATIONS itself, which earlier
+        // rounds of this same task may already have overridden (see the iterationsHint block
+        // below and MAX_AGENT_ITERATIONS_DEFAULT's javadoc). Falls back to whatever
+        // MAX_AGENT_ITERATIONS currently holds for callers that never set the DEFAULT key
+        // (e.g. an older embedding of regnexe-agent), then to a hardcoded 20 if neither is set.
+        Integer defaultIterationsBoxed = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS_DEFAULT);
+        if (defaultIterationsBoxed == null) {
+            defaultIterationsBoxed = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
+        }
+        int defaultIterations = defaultIterationsBoxed != null ? defaultIterationsBoxed : 20;
 
         String taskId = state.getTaskId();
         int round = state.getCurrentRound();
@@ -183,7 +202,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             FlowInstance flow = buildFlow(chainActor, llm,
                     text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
-            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, resumeMode, projectMemory);
+            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, resumeMode, projectMemory, defaultIterations);
             List<BaseMessage> messages = new ArrayList<>(basePrompt.getMessages());
             plan = null;
             String lastRaw = null;
@@ -219,15 +238,42 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         bus.putTransmit(ContextBusKeys.SELECTED_CAPS, plan.getSelectedCapabilityIds());
         bus.putTransmit(ContextBusKeys.CAPABILITY_INPUT_DESCS, plan.getCapabilityInputDescriptions());
 
-        // Apply iterationsHint: override the global maxAgentIterations for this round if the
-        // plan estimates more iterations are needed. Never exceed MAX_SAFE_ITERATIONS.
+        // Apply iterationsHint: set THIS round's maxAgentIterations from the plan's own estimate,
+        // in EITHER direction — not just upward. Originally this only ever raised the ceiling
+        // (hint > current), on the theory that a simple round could just fall back to the global
+        // default's ample room. In practice that meant a round the Planner itself estimated at,
+        // say, 8 iterations still got the full configured default (60 in one real case) to keep
+        // going — including after the goal was already achieved, because nothing ever narrowed
+        // the room back down. A real incident: after a genuinely-complete two-step DB commit
+        // (insert + narrow, both verified via readback), the executor kept calling tools —
+        // re-verifying with a wrong path, wandering into an unrelated filesystem search — for
+        // several more iterations, because 60 was still the ceiling and Reflector (which could
+        // have caught this) only runs once the round's own tool-calling loop stops on its own.
+        //
+        // Always computed relative to defaultIterations (the untouched original config value),
+        // never relative to whatever MAX_AGENT_ITERATIONS currently holds — that may already be
+        // a previous round's override in this same task, and compounding a stale override with a
+        // new one (instead of resetting from the real baseline each round) would drift further
+        // from what this specific round actually needs.
+        //
+        // The hint is a best-effort LLM estimate, not a guarantee — retries, extra confirmations,
+        // and unexpected tool needs all eat into it — so a flat 30% margin is applied before it
+        // becomes a hard ceiling, rather than truncating a genuinely-in-progress round right when
+        // Reflector's own zero-tool-executions guard would otherwise let it finish naturally.
         if (plan.getIterationsHint() != null && plan.getIterationsHint() > 0) {
-            Integer current = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
             int hint = Math.min(plan.getIterationsHint(), MAX_SAFE_ITERATIONS);
-            if (current == null || hint > current) {
-                bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS, hint);
-                log.debug("Round {}: iterationsHint={} applied (was {})", round, hint, current);
+            int hintWithMargin = (int) Math.ceil(hint * 1.3);
+            Integer current = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
+            if (current == null || hintWithMargin != current) {
+                bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS, hintWithMargin);
+                log.debug("Round {}: iterationsHint={} (+30% margin={}) applied (was {}, default {})",
+                        round, hint, hintWithMargin, current, defaultIterations);
             }
+        } else {
+            // No hint this round (Planner judged the default sufficient, or this is the
+            // no-candidates direct-answer branch) — reset to the real baseline instead of
+            // silently keeping whatever a previous round's override left behind.
+            bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS, defaultIterations);
         }
 
         currentRound(state).setPlan(plan);
@@ -259,11 +305,15 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                                             List<CapabilityCandidate> candidates,
                                             List<HistoryInfos> sessionHistory,
                                             boolean resumeMode,
-                                            String projectMemory) {
+                                            String projectMemory,
+                                            int defaultIterations) {
         List<BaseMessage> messages = new ArrayList<>();
 
         // ── System message: SYSTEM_PROMPT + PROJECT_MEMORY + SUMMARY + capabilities ──
-        StringBuilder systemSb = new StringBuilder(SYSTEM_PROMPT);
+        // .formatted() resolves both the real %s (the actual configured default, not a stale
+        // hardcoded number) and the escaped %% ("25%% buffer" -> "25% buffer" in what the LLM
+        // actually reads).
+        StringBuilder systemSb = new StringBuilder(SYSTEM_PROMPT.formatted(defaultIterations));
 
         // Long-term project memory (REX.md) — always present once configured, independent of
         // sessionId/history.

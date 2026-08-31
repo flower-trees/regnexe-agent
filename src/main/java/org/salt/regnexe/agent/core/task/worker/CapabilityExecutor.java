@@ -90,6 +90,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         AgentContext agentContext = bus.getTransmit(ContextBusKeys.AGENT_CONTEXT);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
         Integer maxAgentIterations = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
+        Integer maxConsecutiveToolFailures = bus.getTransmit(ContextBusKeys.MAX_CONSECUTIVE_TOOL_FAILURES);
         boolean verbose = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.VERBOSE));
         boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
         String projectMemory = bus.getTransmit(ContextBusKeys.PROJECT_MEMORY);
@@ -116,8 +117,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         Map<String, CapabilityType> typeByName = new HashMap<>();
         java.nio.file.Path claudeCompatWorkspace = bus.getTransmit(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE);
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skillSystemPrompts,
-                subAgents, maxAgentIterations, listener, taskId, round, verbose, toolExecutions, typeByName,
-                claudeCompatWorkspace, baseToolNames);
+                subAgents, maxAgentIterations, maxConsecutiveToolFailures, listener, taskId, round, verbose,
+                toolExecutions, typeByName, claudeCompatWorkspace, baseToolNames);
         PlanOutput plan = currentRound(state).getPlan();
         ResultStrategy resultStrategy = resolveResultStrategy(plan);
         boolean returnLastToolResult = resultStrategy == ResultStrategy.RETURN_LAST;
@@ -144,6 +145,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .onTokenUsage(u -> listener.dispatch(AgentEvent.ofTokenUsage(taskId, round, u)));
         if (maxAgentIterations != null) {
             executorBuilder.maxIterations(maxAgentIterations);
+        }
+        if (maxConsecutiveToolFailures != null) {
+            executorBuilder.maxConsecutiveToolFailures(maxConsecutiveToolFailures);
         }
         McpAgentExecutor executor = executorBuilder.build();
 
@@ -287,7 +291,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     private void resolveCapabilities(Marketplace marketplace, List<String> capIds,
                                      ChainActor chainActor, BaseChatModel llm, ModelProvider llmProvider,
                                      List<Tool> mcpTools, List<String> skillSystemPrompts, List<SubAgent> subAgents,
-                                     Integer maxIterations,
+                                     Integer maxIterations, Integer maxConsecutiveToolFailures,
                                      AgentEventListener listener, String taskId, int round, boolean verbose,
                                      List<ToolExecutionRecord> toolExecutions,
                                      Map<String, CapabilityType> typeByName,
@@ -398,6 +402,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                         ab.onTokenUsage(u -> listener.dispatch(
                             AgentEvent.ofCapabilityTokenUsage(taskId, round, agentCapName, u)));
                         if (maxIterations != null) ab.maxIterations(maxIterations);
+                        if (maxConsecutiveToolFailures != null) ab.maxConsecutiveToolFailures(maxConsecutiveToolFailures);
                         subAgents.add(ab.build());
                     } else if (cap.getTool() != null) {
                         mcpTools.add(cap.getTool());

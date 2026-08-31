@@ -49,8 +49,11 @@ import java.util.stream.Stream;
  * flow.
  *
  * <p>Each subdirectory becomes its own single-capability Plugin, {@code pluginId} = directory
- * name — matching {@code ManifestPluginLoader}'s {@code pluginId + "." + name} capabilityId
- * convention exactly, just without a manifest.
+ * name. Unlike {@link ManifestPluginLoader} (one plugin, several skills/tools — {@code
+ * pluginId + "." + name} disambiguates siblings), a flat skill is always exactly one capability
+ * per directory, so {@code capabilityId} is just {@code pluginId} with no suffix — see
+ * {@link #loadOne} for why appending {@code "." + name} here was an actual bug, not just
+ * redundant.
  */
 @Slf4j
 public class FlatSkillLoader {
@@ -81,8 +84,19 @@ public class FlatSkillLoader {
         String pluginId = skillDir.getFileName().toString();
         try {
             SkillConfig config = FileSystemSkillConfigLoader.fromPath(skillDir);
+            // capabilityId = pluginId (the directory name), NOT "pluginId.name" — SKILL.md's own
+            // `name:` field is, by convention (and by what skill-creator itself writes), always
+            // equal to its directory name. Appending it here used to produce a doubled id like
+            // "robot-article-writing.robot-article-writing" that resolveDescriptor() would never
+            // actually see selected: the Planner LLM naturally selects the clean bare name it saw
+            // everywhere else (SKILL.md's own name/description, the candidate's `name` field), not
+            // this internal doubled id — so every natural-language selection of a flat skill
+            // silently failed at Execute time with "Capability not found", while the direct
+            // `/skill-name` slash-invocation path (a different resolution mechanism entirely) kept
+            // working, masking the bug. One capability per directory means pluginId alone is
+            // already a stable, unique id — no suffix needed.
             CapabilityDescriptor cap = CapabilityDescriptor.builder()
-                    .capabilityId(pluginId + "." + config.getName())
+                    .capabilityId(pluginId)
                     .pluginId(pluginId).type(CapabilityType.SKILL)
                     .skillConfig(config)
                     .build();

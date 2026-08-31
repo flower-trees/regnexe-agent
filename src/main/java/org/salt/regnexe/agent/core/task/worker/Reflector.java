@@ -99,7 +99,13 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         }
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
-        ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        // Falls back to DEFAULT_MODEL when no Reflector-specific override is configured —
+        // see ContextBusKeys.REFLECTOR_MODEL's javadoc for why judgment quality here specifically
+        // (a wrong FINISH is a one-way door, unlike a Planner or Execute mistake) has outsized
+        // leverage relative to its own small per-call cost.
+        ModelSpec reflectorModelSpec = bus.getTransmit(ContextBusKeys.REFLECTOR_MODEL);
+        ModelSpec modelSpec = reflectorModelSpec != null
+                ? reflectorModelSpec : bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
 

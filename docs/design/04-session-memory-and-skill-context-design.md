@@ -14,6 +14,9 @@
 | 三 | `PeriodicConversationSummaryMemory` | ✅ 已实现 | 单元测试对比 50 轮历史下滚动版 vs 周期版摘要 LLM 调用次数：30 次 vs 2 次 |
 | 四 | `--continue`/`-c` | ✅ 已实现 | `harness-testbed` 先用 `--session` 建历史，再单独 `--continue` 启动，确认自动接上同一 session 历史（`favorite number = 42` 正确召回），且未触发 Task resume |
 | 五 | Skill 共享执行上下文 | ✅ 已实现并验证（经过一轮设计修正） | 见下方详述 |
+| 八 | `SlidingWindowContext` 未接 `summarizer`（单任务内 ReAct step 压缩退化成原文堆叠） | ✅ 已实现并验证 | 见八节 |
+| 九 | `executeSkill()` 沙盒范围过窄，摸不到真实项目文件 | ✅ 已实现并真实复测 | 见九节 |
+| 十 | `executeSkill()` 的 `maxIterations` 硬编码 10，未接配置 | ✅ 已实现，待真实复测 | 见十节 |
 
 **五节详情——第一轮实现**：`CapabilityExecutor.resolveCapabilities()` 的 `SKILL` 分支改为把 `SkillConfig` 的 `systemPrompt`/`references`/`scripts` 合并进本轮共享的 `executorBuilder`，不再调用 `Skill.from(...).build()` 起独立执行器；`allowedTools` 声明了的分支沿用旧的"按名字解析进 mcpTools"逻辑不变，没声明的分支只共享这一轮 Planner 恰好选中的工具。`j-langchain` 单元测试 + `regnexe-agent` 全量单测（`RegnexeAgentExecuteSkillTest` 等）通过，确认 `executeSkill()`（`/skill名` 直调）那条独立执行器路径完全不受影响。
 
@@ -201,3 +204,63 @@ SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 1
 - **压缩策略**：单元测试对比 `ConversationSummaryBufferMemory` 和 `PeriodicConversationSummaryMemory` 在同样一段 50 轮历史上触发的摘要 LLM 调用次数，确认周期版本明显更少
 - **`--continue`**：`harness-testbed` 上先用 `--session` 建一个有对话历史的 session，不带 `--session` 只用 `--continue` 重新启动，确认接上的是刚才那个 session 的历史，且不触发 Task resume 逻辑
 - **Skill 共享上下文**：用真实的 `claude-md-improver`（案例 002 用过的那个）重新跑一遍，确认它能用共享工具正确探索、找到并读取真实文件（已验证：`harness-testbed-skillctx-v3`，`bash`/`list_files`/`read_file` 找到并读取了 `CLAUDE.md`/`README.md`/`fixtures.md`/`PARITY-NOTES.md`，给出了准确报告）。写入类操作会不会弹确认这一条，这次实测中 Skill 按自己 SKILL.md 的工作流在报告后停下等待用户批准、没有实际发起写入，所以没有被直接触发——但由构造保证成立：Skill 现在用的是跟主线程完全相同的 `Tool` 对象（同一个 `FileTools.writeFile`/`BashTool.bash` 实例），而不是隔离沙盒里重新构造的等价物，所以 `pauseAction` 确认逻辑是同一份代码路径，不存在"Skill 走的是另一份没有确认逻辑的写入实现"这种可能——逻辑上不需要单独验证，但如果要拿到一次真实的确认框截图，需要一个会真正触发写入的 case（比如 `claude-md-improver` 拿到用户批准后的第二轮，或者换一个开局就会写文件的 Skill）
+
+---
+
+## 八、`SlidingWindowContext` 未接 `summarizer`：单任务内的 ReAct step 压缩退化成原文堆叠（真实场景发现，已修复）
+
+**跟前面几节的关系**：二/三/五节讲的是跨 Turn/跨 Session 的记忆（`REX.md`、`PeriodicConversationSummaryMemory`、Skill 共享上下文），这一节是完全不同的第三层——**单次 `execute()` 内部**、ReAct 循环自己的短期记忆，`j-langchain` 的 `SlidingWindowContext`（`core.agent.memory` 包），`regnexe-cli` 通过 `.withAgentContext(SlidingWindowContext.builder()...)` 接入，跟 `context_window_size` 配置项对应。
+
+**发现过程**：在 `salt-robot-skills` 真实 skill 全流程测试中（一次单任务 89 次工具调用、`context_window_size=6` 的 deepseek session），观察到模型在早期读过一次 `news-sources.md`（56 行）之后，几十个工具调用之后又重新读了一次同样的文件——且伴随 `articles-for-home`/`article-categories` 等只读查询的多次裸重复调用。
+
+**根因**：`SlidingWindowContext` 只保留最近 `windowSize` 个 ReAct step 在结构化区域；超出的最老 step 会被"压缩"进一个叫 `earlyStepsSummary` 的字符串，理论上应该调用一个 `summarizer` LLM 做真正的摘要——但 `regnexe-cli` 的 `CliMain.buildAgent()` 从未调用 `SlidingWindowContext.Builder#summarizer(...)`：
+
+```java
+// 修复前
+.withAgentContext(SlidingWindowContext.builder()
+        .windowSize(ac.getContextWindowSize())
+        .build())   // summarizer 始终为 null
+```
+
+`summarizer == null` 时，`compressEarliestStep()` 直接走 `else` 分支原文拼接（`earlyStepsSummary = concat(previous, stepText)`），不做任何压缩。89 次调用、窗口 6，意味着有 ~80 个 step 的原始文本（包括体积很大的 Playwright DOM snapshot）被原样堆进这一个字符串里——`news-sources.md` 的内容技术上仍在上下文里（没有被真正丢弃），但淹没在一大坨未压缩的原始工具输出中，信噪比很低，模型确实容易读不到/读漏。
+
+**修复**：`CliMain.java` 新增 `buildSummarizerModel(RexConfig)`，用 `DefaultModelProvider`/`ModelSpec` 复用会话本身配置的模型（vendor+model 与主 Agent 相同，API key 通过已经写好的 `System.setProperty` 机制自动复用，不需要额外配置项），接到 `.summarizer(...)`：
+
+```java
+// 修复后
+.withAgentContext(SlidingWindowContext.builder()
+        .windowSize(ac.getContextWindowSize())
+        .summarizer(buildSummarizerModel(config))
+        .build())
+```
+
+`buildSummarizerModel` 构造失败时（未知 vendor 等）返回 `null`，退回原来的纯拼接行为，不影响 CLI 正常启动——压缩质量是锦上添花，不应该成为启动阻塞点。
+
+**验证**：`regnexe-cli` 编译、打包通过；新起一个 session 冷启动无异常（`buildSummarizerModel` 没有抛异常导致的告警日志），确认这条路径本身不会引入启动期回归。**未做**：没有专门跑一次超过 `windowSize` 的长任务、逐字对比"summarizer 接入前后 `earlyStepsSummary` 的实际内容/长度"——这是后续要补的真实端到端验证，目前只验证到"接入且不崩溃"这一层。
+
+---
+
+## 九、`executeSkill()`（`/skill名` 直调）拿不到真实项目工具，被强行套进 `.rex/` 沙盒（真实场景发现，已修复）
+
+**发现过程**：按第八节的修复重新用 `salt-robot-skills` 的 `robot-article-writing` skill 真实测试，这次改用**正确的**调用方式 `/robot-article-writing ...`（此前几轮误用自然语言描述，压根没走 skill 加载路径，是另一个问题，不在这节）。结果：模型的 `list_directory {"path":"."}` 只看到一个 `mcp.json`，`file_exists {"path":"lib/db.py"}` 返回 `false`，试图用 `../lib/db.py` 跳出去时被拒绝：`SecurityException: Path escapes workspace: ../lib/db.py`。模型因此被迫用沙盒里的 `write_file` 把编好的文章内容写成 JSON 扔进 `.rex/payload/`，从未真正调用 `lib/db.py` 的 `insert_article`——而且因为完全摸不到项目文件、大概率也没有真的做联网核实，直接编造了几篇内容详实（含虚构的具名人物发言）的"文章"，是真实的幻觉事故，好在被用户中途打断，没有流到 `--commit`。
+
+**根因**：regnexe 里一个 SKILL 类型能力，实际存在**两条完全不同、互不一致的执行路径**：
+
+1. **Planner 自动选中**（`execute()` → `CapabilityExecutor.resolveCapabilities()` 的 SKILL 分支）：把 skill 的 `systemPrompt` 直接合并进跟主 Agent 共享的同一个 executor，`baseToolNames`（`RegnexeAgentBuilder.withTool()` 注册的真实 `bash`/`read_file`/... ，作用域是整个项目根目录）无条件并入这一轮的工具集——该分支自己的注释写得很清楚："The claudeCompatMode/SkillWorkspaceTools sandbox is deliberately not used on this path"。这条路径第五节已验证过。
+2. **`/skill名` 直调**（`RegnexeAgent.executeSkill()`）：走的是完全独立的 `Skill.from(cap.getSkillConfig(), chainActor).llm(llm)`，构造一个**全新、隔离的** `Skill` 实例，只在 `claudeCompatWorkspace` 不为空时把它设为沙盒根目录——**从未把 `baseToolNames` 对应的真实工具注入进去**。`j-langchain` 的 `Skill` 类其实原生支持通过 `injectParentTools(List<Tool>)` 注入真实工具（`collectTools()` 会把 `parentTools` 无条件并入），但这个入口从来没被 `executeSkill()` 调用过。
+
+两条路径对同一个 SKILL 能力给出完全不对等的工具访问——按官方设计意图（"a Skill shares the main agent's full tool access because it runs in the same context"），`/skill名` 直调本应至少不比 Planner 自动选中更受限，但实际恰恰是最受限的那条路径，而且是**唯一"正规"的用户主动调用方式**。
+
+**修复**：`RegnexeAgent.executeSkill()` 新增：用 `baseToolNames` 从 `marketplace` 按名字解析出真实 `Tool` 对象（`marketplace.resolveDescriptor(name).getTool()`，跟 base tool 注册时 `capabilityId = tool.getName()` 对应），解析到就调用 `skillBuilder.claudeCompatMode(false)`（避免真实 `bash`/`read_file` 和沙盒版同名工具同时注册、互相打架）并在 `build()` 之后、`invoke()` 之前调用 `skill.injectParentTools(baseTools)`；解析不到（`baseToolNames` 为空，比如 regnexe-agent 被其他宿主嵌入、没注册任何 base tool 的场景）则完全保留原来的 `claudeCompatWorkspace` 沙盒行为，不引入回归。
+
+**验证**：`regnexe-agent` 编译通过；`RegnexeAgentExecuteSkillTest`（含"claude-compat workspace routing"用例——验证没有 base tool 时沙盒路径依然正常工作）5 个测试全部通过。**真实复测**：用户用真实的 `/robot-article-writing` + deepseek 重新跑，确认 `bash`/`read_file` 现在真的能直接读到 `lib/db.py`（1523行）/`docs/news-sources.md`，不再报 `SecurityException: Path escapes workspace`——沙盒范围这部分修复本身验证通过。但跑到第16次工具调用时被另一个独立限制截断，见十节。
+
+## 十、`executeSkill()` 的 `maxIterations` 硬编码 10，从未接上 `agent.max_agent_iterations` 配置（真实场景发现，已修复）
+
+**发现过程**：紧接着九节修复后的真实复测——`bash`/`read_file` 已经能正确摸到项目文件，跑到第10轮工具调用时任务却被强制中断：`Skill execution failed: Max iterations (10) reached without a final answer.`。这10轮全部花在查库表结构、读 `SKILL.md`/`docs/design/article-writing.md`、核对已有文章去重上，连选题、联网核实都还没开始。
+
+**根因**：`j-langchain` 的 `Skill.Builder.build()` 解析 `maxIterations` 的优先级是：`Builder` 显式传的值 → `SkillConfig` 自己声明的 `max_iterations`（SKILL.md frontmatter）→ 都没有则用 `Skill.Builder` 私有常量 `DEFAULT_MAX_ITERATIONS = 10`。`robot-article-writing` 的 SKILL.md 没声明 `max_iterations`，而 `RegnexeAgent.executeSkill()` 从来没有调用过 `skillBuilder.maxIterations(...)`——`RegnexeAgent` 自己其实持有 CLI 配置里 `agent.max_agent_iterations`（这次用户配的是 30）对应的 `maxAgentIterations` 字段，但只接进了 Planner 驱动路径（`ContextBusKeys.MAX_AGENT_ITERATIONS`transmit map），`executeSkill()` 这条独立路径完全没引用它——跟九节是同一类"配置存在但没接线"的问题，只是这次是 `maxIterations` 不是工具访问。
+
+**修复**：`executeSkill()` 里，仅当 `cap.getSkillConfig().getMaxIterations() == null`（skill 作者自己没在 SKILL.md 里明确声明预算）时，才调用 `skillBuilder.maxIterations(maxAgentIterations)`，把 CLI 配置的预算接上；skill 作者如果自己声明了 `max_iterations`，尊重作者意图，不覆盖。
+
+**验证**：编译通过；`RegnexeAgentExecuteSkillTest` 5 个测试依然全部通过（没有 skill 声明 `max_iterations` 的测试用例，这条改动对它们是纯粹的"从10变成30"，不改变其他行为）。**未做**：没有做一次真正跑够 30 轮、验证不会再次被过早截断的端到端复测——这是用户下一步要自己验证的（如果这次还不够，31~50 轮左右的任务量，可以再考虑把 `max_agent_iterations` 配置值调大）。

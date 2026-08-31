@@ -167,7 +167,10 @@ public class DefaultPluginManagerManifestCompatTest {
             SimpleMarketplace marketplace = new SimpleMarketplace();
             marketplace.load(new DefaultPluginManager().addSkillsDirectory(skillsDir.toString()));
 
-            CapabilityDescriptor cap = marketplace.resolveDescriptor("tang-poetry-composer.tang-poetry-composer");
+            // capabilityId is the bare directory name, NOT "tang-poetry-composer.tang-poetry-composer"
+            // — see FlatSkillLoader.loadOne for why that doubled form was a real bug (this test
+            // used to assert the buggy id and pass, which is exactly how it went unnoticed).
+            CapabilityDescriptor cap = marketplace.resolveDescriptor("tang-poetry-composer");
             Assert.assertNotNull("flat SKILL.md under skills/ must load without any manifest", cap);
             Assert.assertEquals(CapabilityType.SKILL, cap.getType());
             Assert.assertEquals("tang-poetry-composer", cap.getSkillConfig().getName());
