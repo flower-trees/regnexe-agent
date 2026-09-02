@@ -70,7 +70,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
               items are replaced wholesale — action should be CONTINUE, not FINISH. Describe the deviation \
               in planAdjustment.
             - roundSummary is a hand-off note for the NEXT round's planner, not a user-facing answer. \
-              Base it on the full "Tool calls this round" list below, not just the last call. It should \
+              Base it on the Execution result below. It should \
               let the next round skip redoing finished work and go straight to fixing what's broken. \
               Cover three things concisely: (1) concrete artifacts already produced this round — files \
               written, records committed, research already gathered, with enough specificity (ids, \
@@ -199,47 +199,18 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         sb.append("Execution result:\n");
         sb.append(execText != null ? execText : "(no output)").append("\n\n");
 
-        // Full tool-call list for THIS round (see docs/design/08-round-handoff-redesign.md) — the
-        // basis for roundSummary. Deliberately not the same thing as execText/lastToolResult above:
-        // that's just the single last call; this is every call, so roundSummary can name concrete
-        // artifacts already produced and, on failure, the specific cause rather than "an error
-        // occurred".
-        //
-        // Used to hard-truncate each entry's arguments/observation here (head-cut at a fixed char
-        // count). Removed — see docs/design/09-context-memory-compaction-design.md: head-cut
-        // truncation silently drops whichever half doesn't happen to survive the cut, and for a
-        // failure observation the actionable detail (e.g. a SyntaxError's exact line) is almost
-        // always at the tail — exactly the class of bug 08's redesign was written to get away
-        // from, not reintroduce one level down. Rendering the full text here until 09's real
-        // compaction design (round-batch summarization, not per-entry truncation) lands.
-        String toolLog = renderToolExecutionsForReflection(exec);
-        if (!toolLog.isEmpty()) {
-            sb.append("Tool calls this round (full list, in order):\n").append(toolLog).append("\n\n");
-        }
-
+        // Deliberately judging from execText (≈finalText) alone again, not the round's full
+        // tool_executions list — see docs/design/09-context-memory-compaction-design.md. The 08
+        // redesign added reading the full list here specifically to stop Reflector trusting a
+        // stale/misleading finalText; going back to finalText-only reintroduces that same risk
+        // (a queried old record could again be misjudged as this round's new output) as a known,
+        // deliberate trade-off for now, in exchange for a bounded prompt.
         List<RoundRecord> rounds = state.getRounds();
         if (rounds.size() > 1) {
             sb.append("This is round ").append(state.getCurrentRound())
               .append(" of max ").append(state.getMaxRounds()).append(".\n");
         }
 
-        return sb.toString();
-    }
-
-    private String renderToolExecutionsForReflection(ExecutionOutput exec) {
-        if (exec == null || exec.getToolExecutions() == null || exec.getToolExecutions().isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        int i = 1;
-        for (var record : exec.getToolExecutions()) {
-            sb.append(i++).append(". ").append(record.getToolName() == null ? "unknown" : record.getToolName());
-            String args = record.getArguments();
-            if (args != null && !args.isBlank()) {
-                sb.append('(').append(args).append(')');
-            }
-            sb.append(" -> ").append(record.getObservation()).append('\n');
-        }
         return sb.toString();
     }
 

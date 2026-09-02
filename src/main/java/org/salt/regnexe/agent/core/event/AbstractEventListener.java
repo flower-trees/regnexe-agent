@@ -92,7 +92,6 @@ public abstract class AbstractEventListener implements AgentEventListener {
             case REFLECT_LLM_RESPONDED-> "[Reflect LLM   ]";
             case REFLECTION_COMPLETED -> "[Reflect Result]";
             case AGENT_COMPLETED      -> "[Agent Done    ]";
-            case LOOP_PAUSE_REASON    -> "[Paused        ]";
             case TOKEN_USAGE          -> "[Token Usage   ]";
             case CAPABILITY_TOKEN_USAGE -> "[Cap Token Usage]";
             case TASK_TOKEN_SUMMARY    -> "[Task Token Usage]";

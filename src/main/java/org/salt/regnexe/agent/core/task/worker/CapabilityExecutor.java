@@ -20,7 +20,6 @@ import org.salt.function.flow.node.FlowNode;
 import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
-import org.salt.regnexe.agent.core.common.util.ExecutionRecordFormatter;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -92,7 +91,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         Integer maxAgentIterations = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
         Integer maxConsecutiveToolFailures = bus.getTransmit(ContextBusKeys.MAX_CONSECUTIVE_TOOL_FAILURES);
         boolean verbose = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.VERBOSE));
-        boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
         String projectMemory = bus.getTransmit(ContextBusKeys.PROJECT_MEMORY);
         Set<String> baseToolNames = bus.getTransmit(ContextBusKeys.BASE_TOOL_NAMES);
         if (baseToolNames == null) baseToolNames = Set.of();
@@ -169,7 +167,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         this.mcpAgentExecutor = executor;
 
-        String agentInput = buildAgentInput(state, narrative, inputDescs, plan, resultStrategy, resumeMode,
+        String agentInput = buildAgentInput(state, narrative, inputDescs, plan, resultStrategy,
                 projectMemory, skillSystemPrompts);
 
         listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_STARTED,
@@ -241,7 +239,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     }
 
     private String buildAgentInput(TaskExecutionState state, String narrative, Map<String, String> inputDescs,
-                                   PlanOutput plan, ResultStrategy resultStrategy, boolean resumeMode,
+                                   PlanOutput plan, ResultStrategy resultStrategy,
                                    String projectMemory, List<String> skillSystemPrompts) {
         StringBuilder sb = new StringBuilder();
         // Long-term project memory (REX.md) — same content the Planner already saw in its own
@@ -268,14 +266,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         String supplement = state.getRequest().getSupplementInput();
         if (supplement != null && !supplement.isBlank()) {
             sb.append("User supplement:\n").append(supplement).append("\n\n");
-        }
-        if (resumeMode) {
-            String previousRecords = ExecutionRecordFormatter.formatPreviousExecutionRecords(state);
-            if (!previousRecords.isBlank()) {
-                sb.append("Previous execution records before resume:\n")
-                  .append(previousRecords)
-                  .append("\n\n");
-            }
         }
         sb.append("Execution plan:\n").append(narrative != null ? narrative : "");
         if (inputDescs != null && !inputDescs.isEmpty()) {

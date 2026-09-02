@@ -52,10 +52,8 @@ import org.salt.jlangchain.core.message.MessageType;
 import org.salt.jlangchain.core.skill.Skill;
 import org.salt.jlangchain.rag.tools.Tool;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,8 +64,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * RegnexeAgent Runtime — orchestrates the Search→Plan→Execute→Reflect loop.
  * Not a Spring bean; obtain instances via {@link RegnexeAgentBuilder}.
  *
- * <p>Thread-safety note: one execute()/resume() call at a time per instance.
- * {@link #pause()} may be called from any thread while execute/resume is in progress.
+ * <p>Thread-safety note: one execute() call at a time per instance.
+ * {@link #pause()} may be called from any thread while execute() is in progress.
  */
 @Slf4j
 public class RegnexeAgent {
@@ -102,7 +100,7 @@ public class RegnexeAgent {
     private final String projectMemory;
     private final java.util.Set<String> baseToolNames;
 
-    /** Set at the start of each execute()/resume(); checked by pause(). */
+    /** Set at the start of each execute(); checked by pause(). */
     private volatile AtomicBoolean activeStopSignal;
 
     RegnexeAgent(FlowEngine flowEngine,
@@ -177,50 +175,11 @@ public class RegnexeAgent {
                 "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds));
 
         List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
-        return runLoop(state, sessionHistory, false);
-    }
-
-    /** Equivalent to {@link #resume(String, String, boolean)} with {@code force=false}. */
-    public AgentResult resume(String sessionId, String supplementInput) {
-        return resume(sessionId, supplementInput, false);
+        return runLoop(state, sessionHistory);
     }
 
     /**
-     * Resume the most recently paused (or, with {@code force}, FAILED) task for the given
-     * session. The supplement input is appended to the original request so Planner can see both
-     * the original goal and the new context in separate prompt sections.
-     *
-     * @param force also consider a FAILED task resumable — see {@code TaskStore.listResumable}'s
-     *              javadoc for when this is appropriate (the underlying cause has been fixed
-     *              since, e.g. a billing/vendor-config change) vs. not (a real bug — retrying
-     *              blindly just burns the same error again).
-     */
-    public AgentResult resume(String sessionId, String supplementInput, boolean force) {
-        List<TaskExecutionState> resumable = taskStore.listResumable(sessionId, force);
-        if (resumable.isEmpty()) {
-            throw new IllegalStateException("No resumable task found for session: " + sessionId);
-        }
-        TaskExecutionState state = resumable.stream()
-                .max(Comparator.comparingLong(TaskExecutionState::getUpdatedAt))
-                .orElseThrow();
-
-        state.setStatus(TaskStatus.RUNNING);
-        if (supplementInput != null && !supplementInput.isBlank()) {
-            state.getRequest().setSupplementInput(supplementInput);
-        }
-
-        eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
-                EventType.AGENT_STARTED,
-                "Resuming | rounds done: " + state.getCurrentRound()
-                + (supplementInput != null ? " | supplement: " + supplementInput : "")));
-
-        List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
-        return runLoop(state, sessionHistory, true);
-    }
-
-    /**
-     * Signal the currently-running McpAgentExecutor to stop.
-     * The task transitions to PAUSED and can be resumed via {@link #resume}.
+     * Signal the currently-running McpAgentExecutor to stop. The task transitions to PAUSED.
      * Safe to call from any thread.
      */
     public void pause() {
@@ -241,8 +200,8 @@ public class RegnexeAgent {
      * the planner autonomously selecting the skill during {@link #execute}.
      *
      * <p>Does not create a {@link TaskExecutionState} or touch {@code taskStore} — a skill run
-     * cannot be paused/resumed via {@link #pause()}/{@link #resume}. Events still flow through
-     * the same {@link #eventListener} used by execute()/resume(), so a caller's event rendering
+     * cannot be paused via {@link #pause()}. Events still flow through
+     * the same {@link #eventListener} used by execute(), so a caller's event rendering
      * (including the {@code TASK_TOKEN_SUMMARY} that {@code TokenAggregatingEventListener} emits
      * before {@code AGENT_COMPLETED}) needs no special-casing.
      *
@@ -353,14 +312,12 @@ public class RegnexeAgent {
 
     // ── Loop ─────────────────────────────────────────────────────────────────
 
-    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory, boolean resumeMode) {
+    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory) {
         AtomicBoolean stopSignal = new AtomicBoolean(false);
         this.activeStopSignal = stopSignal;
 
-        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory, resumeMode);
+        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory);
 
-        // Loop condition uses state.getCurrentRound() so resume continues correctly
-        // from wherever the prior execution left off.
         FlowInstance flowInstance = flowEngine.builder()
                 .loop(
                         i -> state.getStatus() == TaskStatus.RUNNING
@@ -369,54 +326,15 @@ public class RegnexeAgent {
                 )
                 .build();
 
-        // Set only on the two PAUSED-by-exception paths below, dispatched as LOOP_PAUSE_REASON
-        // further down so a host can explain *why* it paused instead of just "paused" — a raw
-        // HTTP failure and a Ctrl+C are both PAUSED but not equally self-explanatory.
-        String pauseReason = null;
-
         try {
             flowEngine.execute(flowInstance, state.getRequest(), transmitMap);
         } catch (Exception e) {
-            Integer httpCode = findHttpStatusCode(e);
-            if (isTransientIOException(e) || (httpCode != null && RETRYABLE_HTTP_CODES.contains(httpCode))) {
-                // A network blip (SocketTimeoutException) or a vendor-side hiccup the vendor
-                // itself says is worth retrying (429 rate limit, 500/502/503) shouldn't strand
-                // already-completed rounds in a dead FAILED state. PAUSED keeps the task eligible
-                // for listResumable()/--resume so real work already done isn't lost.
-                pauseReason = httpCode != null
-                        ? "vendor returned HTTP " + httpCode + " (likely transient — rate limit or a server-side hiccup); safe to just --resume shortly"
-                        : "a transient I/O error (" + e.getMessage() + ")";
-                log.warn("RegnexeAgent loop paused: {}", pauseReason);
-                state.setStatus(TaskStatus.PAUSED);
-                taskStore.save(state);
-            } else if (httpCode != null && USER_ACTIONABLE_HTTP_CODES.contains(httpCode)) {
-                // 401/402: the vendor rejected the request over something only the user can fix
-                // outside this process (top up billing, replace an expired/invalid key) — not a
-                // code bug, and not something retrying on its own will ever get past either. Still
-                // PAUSED, not FAILED: once the real cause is fixed, a plain --resume should just
-                // work, same as any other pause — no need to reach for --force-resume for this
-                // class of error specifically.
-                pauseReason = "vendor rejected the request (HTTP " + httpCode + "): " + e.getMessage()
-                        + " — fix this (billing/API key), then --resume";
-                log.warn("RegnexeAgent loop paused: {}", pauseReason);
-                state.setStatus(TaskStatus.PAUSED);
-                taskStore.save(state);
-            } else {
-                // Includes 403/404 (a real config mistake — wrong model name, no permission —
-                // retrying the identical request will just fail the identical way) and anything
-                // else unclassified: stays a hard FAILED, not silently retried.
-                log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
-                state.setStatus(TaskStatus.FAILED);
-                taskStore.save(state);
-                throw e;
-            }
-        }
-
-        if (pauseReason != null) {
-            // The one event dedicated to this — see EventType.LOOP_PAUSE_REASON's javadoc for why
-            // AGENT_COMPLETED (below, fired unconditionally) isn't itself rendered by the CLI.
-            eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
-                    EventType.LOOP_PAUSE_REASON, pauseReason));
+            // No resume path exists anymore (see docs/design/09-context-memory-compaction-design.md
+            // history) — every loop failure is a hard FAILED now, not classified by HTTP code.
+            log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
+            state.setStatus(TaskStatus.FAILED);
+            taskStore.save(state);
+            throw e;
         }
 
         if (state.getStatus() == TaskStatus.RUNNING) {
@@ -441,8 +359,7 @@ public class RegnexeAgent {
 
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_COMPLETED,
-                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()
-                        + (pauseReason != null ? " | Reason: " + pauseReason : "")));
+                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()));
 
         return AgentResult.builder()
                 .taskId(state.getTaskId())
@@ -452,46 +369,9 @@ public class RegnexeAgent {
                 .build();
     }
 
-    /** True if an IOException (e.g. SocketTimeoutException from an LLM call) appears anywhere in the cause chain. */
-    private boolean isTransientIOException(Throwable e) {
-        for (Throwable cur = e; cur != null; cur = cur.getCause()) {
-            if (cur instanceof IOException) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // HTTP status codes worth treating like a transient I/O error — a 429 rate limit or a
-    // 500/502/503 vendor-side hiccup isn't a code bug, and the vendor itself is effectively saying
-    // "this will probably work if you just try again."
-    private static final java.util.Set<Integer> RETRYABLE_HTTP_CODES = java.util.Set.of(429, 500, 502, 503);
-    // HTTP status codes that mean the vendor rejected the request over something only the user can
-    // fix outside this process — insufficient balance, an invalid/expired key. Not transient (won't
-    // resolve itself), but also not a code bug (403/404, by contrast, mean the request itself is
-    // wrong — a bad model name or missing permission — and stay a hard FAILED below).
-    private static final java.util.Set<Integer> USER_ACTIONABLE_HTTP_CODES = java.util.Set.of(401, 402);
-
-    /**
-     * Walks the cause chain for an {@link org.salt.jlangchain.ai.client.AiException} (thrown by
-     * j-langchain's HTTP clients for any non-2xx LLM API response — see
-     * {@code HttpStreamClient.failureException()}) and returns its status code, or null if none
-     * is present anywhere in the chain (e.g. a plain IOException, or an exception from somewhere
-     * that isn't an HTTP call at all).
-     */
-    private Integer findHttpStatusCode(Throwable e) {
-        for (Throwable cur = e; cur != null; cur = cur.getCause()) {
-            if (cur instanceof org.salt.jlangchain.ai.client.AiException ai) {
-                return ai.getCode();
-            }
-        }
-        return null;
-    }
-
     private Map<String, Object> buildTransmitMap(TaskExecutionState state,
                                                   AtomicBoolean stopSignal,
-                                                  List<HistoryInfos> sessionHistory,
-                                                  boolean resumeMode) {
+                                                  List<HistoryInfos> sessionHistory) {
         Map<String, Object> map = new HashMap<>();
         map.put(ContextBusKeys.STATE, state);
         map.put(ContextBusKeys.CHAIN_ACTOR, chainActor);
@@ -513,7 +393,6 @@ public class RegnexeAgent {
         if (sessionHistory != null && !sessionHistory.isEmpty()) {
             map.put(ContextBusKeys.SESSION_HISTORY, sessionHistory);
         }
-        map.put(ContextBusKeys.RESUME_MODE, resumeMode);
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
         // Untouched baseline for TaskPlanner to compute each round's override against — see its
         // own javadoc for why MAX_AGENT_ITERATIONS itself (mutated per round) isn't safe to reuse.

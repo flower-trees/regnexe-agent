@@ -28,13 +28,6 @@ public enum EventType {
     REFLECTION_COMPLETED,
     AGENT_COMPLETED,
 
-    // Fired only when the outer loop itself paused/failed because of a caught exception (a vendor
-    // HTTP error, a network blip) — distinct from AGENT_COMPLETED (which fires unconditionally on
-    // every outcome and isn't itself rendered) because a host needs to be able to tell "just a
-    // normal pause/finish" apart from "paused specifically because something needs the user's
-    // attention" without string-matching AGENT_COMPLETED's message text.
-    LOOP_PAUSE_REASON,
-
     // Inner loop — emitted by McpAgentExecutor hooks (outer executor)
     LLM_RESPONDED,
     TOOL_CALLED,

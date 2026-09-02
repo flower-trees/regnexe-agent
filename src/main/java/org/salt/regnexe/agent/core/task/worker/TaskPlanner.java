@@ -20,7 +20,6 @@ import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
-import org.salt.regnexe.agent.core.common.util.ExecutionRecordFormatter;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -162,7 +161,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         List<CapabilityCandidate> candidates = bus.getTransmit(ContextBusKeys.CANDIDATES);
         List<HistoryInfos> sessionHistory = bus.getTransmit(ContextBusKeys.SESSION_HISTORY);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
-        boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
         String projectMemory = bus.getTransmit(ContextBusKeys.PROJECT_MEMORY);
         // The untouched original config value — NOT MAX_AGENT_ITERATIONS itself, which earlier
         // rounds of this same task may already have overridden (see the iterationsHint block
@@ -209,7 +207,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             FlowInstance flow = buildFlow(chainActor, llm,
                     text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
-            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, resumeMode, projectMemory, defaultIterations);
+            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, projectMemory, defaultIterations);
             List<BaseMessage> messages = new ArrayList<>(basePrompt.getMessages());
             plan = null;
             String lastRaw = null;
@@ -311,7 +309,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
     private ChatPromptValue buildChatPrompt(TaskExecutionState state,
                                             List<CapabilityCandidate> candidates,
                                             List<HistoryInfos> sessionHistory,
-                                            boolean resumeMode,
                                             String projectMemory,
                                             int defaultIterations) {
         List<BaseMessage> messages = new ArrayList<>();
@@ -376,15 +373,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         String supplement = state.getRequest().getSupplementInput();
         if (supplement != null && !supplement.isBlank()) {
             humanSb.append("\n\n== User supplement ==\n").append(supplement);
-        }
-
-        if (resumeMode) {
-            String previousRecords = ExecutionRecordFormatter.formatPreviousExecutionRecords(state);
-            if (!previousRecords.isBlank()) {
-                humanSb.append("\n\n== Previous execution records before resume ==\n")
-                       .append(previousRecords)
-                       .append("\n\nIf these previous records already satisfy the goal and supplement, do not select tools again.");
-            }
         }
 
         ReflectionHint lastHint = lastHint(state);
