@@ -369,23 +369,54 @@ public class RegnexeAgent {
                 )
                 .build();
 
+        // Set only on the two PAUSED-by-exception paths below, dispatched as LOOP_PAUSE_REASON
+        // further down so a host can explain *why* it paused instead of just "paused" — a raw
+        // HTTP failure and a Ctrl+C are both PAUSED but not equally self-explanatory.
+        String pauseReason = null;
+
         try {
             flowEngine.execute(flowInstance, state.getRequest(), transmitMap);
         } catch (Exception e) {
-            if (isTransientIOException(e)) {
-                // A network blip (e.g. LLM call SocketTimeoutException) shouldn't strand
-                // already-completed rounds in a dead FAILED state. PAUSED keeps the task
-                // eligible for listResumable()/--resume so real work already done (files
-                // already written to disk) isn't lost.
-                log.warn("RegnexeAgent loop paused after transient I/O error: {}", e.getMessage());
+            Integer httpCode = findHttpStatusCode(e);
+            if (isTransientIOException(e) || (httpCode != null && RETRYABLE_HTTP_CODES.contains(httpCode))) {
+                // A network blip (SocketTimeoutException) or a vendor-side hiccup the vendor
+                // itself says is worth retrying (429 rate limit, 500/502/503) shouldn't strand
+                // already-completed rounds in a dead FAILED state. PAUSED keeps the task eligible
+                // for listResumable()/--resume so real work already done isn't lost.
+                pauseReason = httpCode != null
+                        ? "vendor returned HTTP " + httpCode + " (likely transient — rate limit or a server-side hiccup); safe to just --resume shortly"
+                        : "a transient I/O error (" + e.getMessage() + ")";
+                log.warn("RegnexeAgent loop paused: {}", pauseReason);
+                state.setStatus(TaskStatus.PAUSED);
+                taskStore.save(state);
+            } else if (httpCode != null && USER_ACTIONABLE_HTTP_CODES.contains(httpCode)) {
+                // 401/402: the vendor rejected the request over something only the user can fix
+                // outside this process (top up billing, replace an expired/invalid key) — not a
+                // code bug, and not something retrying on its own will ever get past either. Still
+                // PAUSED, not FAILED: once the real cause is fixed, a plain --resume should just
+                // work, same as any other pause — no need to reach for --force-resume for this
+                // class of error specifically.
+                pauseReason = "vendor rejected the request (HTTP " + httpCode + "): " + e.getMessage()
+                        + " — fix this (billing/API key), then --resume";
+                log.warn("RegnexeAgent loop paused: {}", pauseReason);
                 state.setStatus(TaskStatus.PAUSED);
                 taskStore.save(state);
             } else {
+                // Includes 403/404 (a real config mistake — wrong model name, no permission —
+                // retrying the identical request will just fail the identical way) and anything
+                // else unclassified: stays a hard FAILED, not silently retried.
                 log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
                 state.setStatus(TaskStatus.FAILED);
                 taskStore.save(state);
                 throw e;
             }
+        }
+
+        if (pauseReason != null) {
+            // The one event dedicated to this — see EventType.LOOP_PAUSE_REASON's javadoc for why
+            // AGENT_COMPLETED (below, fired unconditionally) isn't itself rendered by the CLI.
+            eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                    EventType.LOOP_PAUSE_REASON, pauseReason));
         }
 
         if (state.getStatus() == TaskStatus.RUNNING) {
@@ -410,7 +441,8 @@ public class RegnexeAgent {
 
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_COMPLETED,
-                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()));
+                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()
+                        + (pauseReason != null ? " | Reason: " + pauseReason : "")));
 
         return AgentResult.builder()
                 .taskId(state.getTaskId())
@@ -428,6 +460,32 @@ public class RegnexeAgent {
             }
         }
         return false;
+    }
+
+    // HTTP status codes worth treating like a transient I/O error — a 429 rate limit or a
+    // 500/502/503 vendor-side hiccup isn't a code bug, and the vendor itself is effectively saying
+    // "this will probably work if you just try again."
+    private static final java.util.Set<Integer> RETRYABLE_HTTP_CODES = java.util.Set.of(429, 500, 502, 503);
+    // HTTP status codes that mean the vendor rejected the request over something only the user can
+    // fix outside this process — insufficient balance, an invalid/expired key. Not transient (won't
+    // resolve itself), but also not a code bug (403/404, by contrast, mean the request itself is
+    // wrong — a bad model name or missing permission — and stay a hard FAILED below).
+    private static final java.util.Set<Integer> USER_ACTIONABLE_HTTP_CODES = java.util.Set.of(401, 402);
+
+    /**
+     * Walks the cause chain for an {@link org.salt.jlangchain.ai.client.AiException} (thrown by
+     * j-langchain's HTTP clients for any non-2xx LLM API response — see
+     * {@code HttpStreamClient.failureException()}) and returns its status code, or null if none
+     * is present anywhere in the chain (e.g. a plain IOException, or an exception from somewhere
+     * that isn't an HTTP call at all).
+     */
+    private Integer findHttpStatusCode(Throwable e) {
+        for (Throwable cur = e; cur != null; cur = cur.getCause()) {
+            if (cur instanceof org.salt.jlangchain.ai.client.AiException ai) {
+                return ai.getCode();
+            }
+        }
+        return null;
     }
 
     private Map<String, Object> buildTransmitMap(TaskExecutionState state,

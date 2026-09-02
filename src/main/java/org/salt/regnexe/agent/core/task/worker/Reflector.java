@@ -203,10 +203,15 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         // basis for roundSummary. Deliberately not the same thing as execText/lastToolResult above:
         // that's just the single last call; this is every call, so roundSummary can name concrete
         // artifacts already produced and, on failure, the specific cause rather than "an error
-        // occurred". Data itself (ToolExecutionRecord.observation) is stored untruncated — the cap
-        // here is only about what's worth spending Reflector's own prompt budget on, not a repeat
-        // of j-langchain's 120-char diagnostic-trailer truncation (that one is for the live event
-        // log now, not for this hand-off — see the design doc for why the two must not be conflated).
+        // occurred".
+        //
+        // Used to hard-truncate each entry's arguments/observation here (head-cut at a fixed char
+        // count). Removed — see docs/design/09-context-memory-compaction-design.md: head-cut
+        // truncation silently drops whichever half doesn't happen to survive the cut, and for a
+        // failure observation the actionable detail (e.g. a SyntaxError's exact line) is almost
+        // always at the tail — exactly the class of bug 08's redesign was written to get away
+        // from, not reintroduce one level down. Rendering the full text here until 09's real
+        // compaction design (round-batch summarization, not per-entry truncation) lands.
         String toolLog = renderToolExecutionsForReflection(exec);
         if (!toolLog.isEmpty()) {
             sb.append("Tool calls this round (full list, in order):\n").append(toolLog).append("\n\n");
@@ -221,9 +226,6 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         return sb.toString();
     }
 
-    private static final int MAX_OBSERVATION_CHARS = 800;
-    private static final int MAX_ARGUMENTS_CHARS = 200;
-
     private String renderToolExecutionsForReflection(ExecutionOutput exec) {
         if (exec == null || exec.getToolExecutions() == null || exec.getToolExecutions().isEmpty()) {
             return "";
@@ -234,16 +236,11 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             sb.append(i++).append(". ").append(record.getToolName() == null ? "unknown" : record.getToolName());
             String args = record.getArguments();
             if (args != null && !args.isBlank()) {
-                sb.append('(').append(capText(args, MAX_ARGUMENTS_CHARS)).append(')');
+                sb.append('(').append(args).append(')');
             }
-            sb.append(" -> ").append(capText(record.getObservation(), MAX_OBSERVATION_CHARS)).append('\n');
+            sb.append(" -> ").append(record.getObservation()).append('\n');
         }
         return sb.toString();
-    }
-
-    private String capText(String s, int max) {
-        if (s == null) return "";
-        return s.length() <= max ? s : s.substring(0, max) + "…(truncated)";
     }
 
     /**
