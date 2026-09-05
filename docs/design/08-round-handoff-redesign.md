@@ -1,6 +1,8 @@
 # 轮次交接重设计：finalText 职责拆分 + Reflector 产出结构化 roundSummary
 
-- 状态：**设计已讨论定调，准备实现**
+> **已被 11 号文档取代**：这里提出的 `roundSummary` 字段（Reflector 每轮兼职产出的手工摘要）已经删除。11 号文档把 `ToolExecutionRecord` 从按轮嵌套改成任务级共享列表，Execute/Planner 直接读结构化数据，不再需要这层转述。本文档保留作为问题排查的历史记录。
+
+- 状态：**已被 11 号文档取代**
 - 涉及仓库：`regnexe-agent`（`task.worker.Reflector`/`TaskPlanner`/`CapabilityExecutor`、`task.state.reflection.ReflectionDecision`、`task.DefaultResultComposer`）
 - 关联文档：跟 07 号文档（`iterationsHint`/分角色模型）同一批真实测试中发现，是同一条"Plan/Execute/Reflect 怎么配合"主线下的另一个具体问题，两者无直接依赖
 - 背景：`salt-robot-skills` 真实资讯写作任务连续多轮测试中，观察到两个具体、可复现的现象：

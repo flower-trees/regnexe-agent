@@ -20,6 +20,7 @@ import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.util.RoundRecords;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -129,12 +130,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
     private static final int MAX_PLAN_RETRIES = 2;
     private static final int MAX_SAFE_ITERATIONS = 200;
-    /**
-     * How many completed rounds' roundSummary to show in "Progress so far" — see
-     * docs/design/08-round-handoff-redesign.md. A conservative starting value; each entry is
-     * Reflector's own compact hand-off note, not raw per-round history, so this is a much cheaper
-     * knob to widen than it would be for full tool-call dumps.
-     */
+    /** How many completed rounds' finalText to show in "Progress so far". */
     private static final int RECENT_ROUNDS_WINDOW = 3;
     private static final String PARSE_ERROR_CORRECTION =
             "[PARSE ERROR] Your previous response was not valid JSON. " +
@@ -281,7 +277,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS, defaultIterations);
         }
 
-        currentRound(state).setPlan(plan);
+        RoundRecords.current(state).setPlan(plan);
         state.setUpdatedAt(System.currentTimeMillis());
 
         listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
@@ -389,25 +385,20 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             }
         }
 
-        // Recent-round progress: reads Reflector's roundSummary (full-data hand-off, see
-        // docs/design/08-round-handoff-redesign.md), not ExecutionOutput.finalText — that field is
-        // Execute's own concise answer to the user, a different audience/purpose, and on a failed
-        // round used to carry a truncated diagnostic trailer that lost exactly the detail this
-        // needed. roundSummary is written once per round by the (stronger-model) Reflector from
-        // that round's complete tool_executions, so showing the last several is cheap — unlike
-        // showing raw per-round history, which was the reason this used to be capped to just one.
+        // Recent-round progress. Two parts, see docs/design/11-round-context-sharing-design.md:
+        // earlyRoundsSummary (older rounds, already compacted — see Reflector's periodic batch
+        // compaction of TaskExecutionState.toolExecutions) + each recent round's own finalText
+        // (Execute's own concise answer — the raw tool-call log itself lives in
+        // state.toolExecutions now, not here; TaskPlanner doesn't need call-by-call detail).
+        StringBuilder progressSb = new StringBuilder();
+        if (state.getEarlyRoundsSummary() != null && !state.getEarlyRoundsSummary().isBlank()) {
+            progressSb.append("\n\nEarlier rounds (compacted):\n").append(state.getEarlyRoundsSummary());
+        }
         List<RoundRecord> rounds = state.getRounds();
         int from = Math.max(0, rounds.size() - 1 - RECENT_ROUNDS_WINDOW);
-        StringBuilder progressSb = new StringBuilder();
         for (int i = from; i < rounds.size() - 1; i++) {
             RoundRecord r = rounds.get(i);
-            String summary = r.getReflection() != null ? r.getReflection().getRoundSummary() : null;
-            if (summary == null || summary.isBlank()) {
-                // Defensive fallback — should be rare now that Reflector always sets roundSummary,
-                // but a round that failed before ever reaching Reflector (e.g. Search/Plan itself
-                // threw) has no ReflectionDecision to read from at all.
-                summary = r.getExecutionResult() != null ? r.getExecutionResult().getFinalText() : null;
-            }
+            String summary = r.getExecutionResult() != null ? r.getExecutionResult().getFinalText() : null;
             if (summary != null && !summary.isBlank()) {
                 progressSb.append("\n\nRound ").append(r.getRoundNumber()).append(" summary:\n").append(summary);
             }
@@ -586,10 +577,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         return null;
     }
 
-    private RoundRecord currentRound(TaskExecutionState state) {
-        List<RoundRecord> rounds = state.getRounds();
-        return rounds.get(rounds.size() - 1);
-    }
 
     @Override
     public void stop() {

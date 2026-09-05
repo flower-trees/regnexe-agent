@@ -26,13 +26,12 @@ import java.util.List;
  *
  * <p>FINISHED tasks return the last round's {@code finalText} — that's Execute's own genuine
  * final answer to the user's goal, exactly what should be shown. Any other outcome (TIMEOUT,
- * ESCALATED, or a round that failed before ever finishing) prefers the last round's Reflector
- * {@code roundSummary} instead: since {@link org.salt.regnexe.agent.core.task.worker.CapabilityExecutor}
- * now leaves a failed round's {@code finalText} as a short fixed marker (see
- * docs/design/08-round-handoff-redesign.md), {@code roundSummary} is the only text that actually
- * says what was accomplished and why the task didn't finish. Never returns null — a task that
- * produced no usable text from either source still gets an honest, synthesized status line rather
- * than silently showing nothing to the caller.
+ * ESCALATED, or a round that failed before ever finishing) prefers Reflector's own {@code reason}
+ * instead: since {@link org.salt.regnexe.agent.core.task.worker.CapabilityExecutor} leaves a
+ * failed round's {@code finalText} as a short fixed marker, {@code reason} is the text that
+ * actually says why the task didn't finish. Never returns null — a task that produced no usable
+ * text from either source still gets an honest, synthesized status line rather than silently
+ * showing nothing to the caller.
  */
 public class DefaultResultComposer implements ResultComposer {
 
@@ -44,9 +43,9 @@ public class DefaultResultComposer implements ResultComposer {
         }
 
         if (state.getStatus() != TaskStatus.FINISHED) {
-            String summary = decision != null ? decision.getRoundSummary() : null;
-            if (summary != null && !summary.isBlank()) {
-                return summary;
+            String reason = decision != null ? decision.getReason() : null;
+            if (reason != null && !reason.isBlank()) {
+                return reason;
             }
         }
 

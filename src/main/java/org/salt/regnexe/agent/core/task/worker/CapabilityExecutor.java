@@ -20,6 +20,7 @@ import org.salt.function.flow.node.FlowNode;
 import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.util.RoundRecords;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
@@ -100,7 +101,14 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         int round = state.getCurrentRound();
         String taskId = state.getTaskId();
         state.setLastToolResult(null);
-        List<ToolExecutionRecord> toolExecutions = new ArrayList<>();
+        // Flat, task-wide list (see docs/design/11-round-context-sharing-design.md) — every tool
+        // call across the whole task appends directly here, not into a per-round local list that
+        // gets copied in at the end. ToolExecutionRecord.round self-identifies which round each
+        // entry belongs to.
+        if (state.getToolExecutions() == null) {
+            state.setToolExecutions(new ArrayList<>());
+        }
+        List<ToolExecutionRecord> toolExecutions = state.getToolExecutions();
 
         List<Tool> mcpTools = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
@@ -133,7 +141,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         String sharedLoopScope = selectedSkillNames.size() == 1
                 ? "[skill:" + selectedSkillNames.get(0) + "]" : null;
 
-        PlanOutput plan = currentRound(state).getPlan();
+        PlanOutput plan = RoundRecords.current(state).getPlan();
         ResultStrategy resultStrategy = resolveResultStrategy(plan);
         boolean returnLastToolResult = resultStrategy == ResultStrategy.RETURN_LAST;
         AtomicReference<String> outerToolCall = new AtomicReference<>();
@@ -195,14 +203,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             output.setStatus(ExecutionStatus.FAILED);
             // Deliberately NOT the rich "Incomplete(...) Last known result: ..." text this used to
             // be: that diagnostic detail (with j-langchain's own 120-char-truncated tool-call
-            // trailer baked into e.getMessage()) is no longer what downstream planning reads — see
-            // docs/design/08-round-handoff-redesign.md. This round's Reflector call builds
-            // roundSummary from the full, untruncated tool_executions list instead, which is what
-            // the next round's Planner now reads. finalText only needs to be a short, honest marker
-            // for whatever ends up showing this round's raw text (e.g. DefaultResultComposer's
-            // last-resort fallback when no round ever produced a roundSummary either). The rich
-            // e.getMessage() text still reaches the live event log two lines below, unchanged —
-            // that's a different audience (a human watching in real time) with different needs.
+            // trailer baked into e.getMessage()) isn't what downstream planning reads. finalText
+            // only needs to be a short, honest marker; the round's real tool-call detail already
+            // lives in state.toolExecutions (recorded as it happened, not reconstructed here). The
+            // rich e.getMessage() text still reaches the live event log two lines below, unchanged
+            // — that's a different audience (a human watching in real time) with different needs.
             output.setFinalText("Round " + round + " incomplete: iteration budget ("
                     + (maxAgentIterations != null ? maxAgentIterations : "?") + " steps) exceeded.");
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
@@ -217,15 +222,12 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         } finally {
             this.mcpAgentExecutor = null;
         }
-        output.setToolExecutions(new ArrayList<>(toolExecutions));
 
         // Unconditional — success or failure — so Reflector never reads a stale value left over
-        // from an earlier round (previously this was only set in the success branch; see the
-        // design doc). Reflector's own judgment now primarily reads the full tool_executions list
-        // rather than this single string, but it's kept as a cheap, always-consistent fallback.
+        // from an earlier round (previously this was only set in the success branch).
         bus.putTransmit(ContextBusKeys.EXEC_TEXT, output.getFinalText());
 
-        currentRound(state).setExecutionResult(output);
+        RoundRecords.current(state).setExecutionResult(output);
         state.setUpdatedAt(System.currentTimeMillis());
         if (taskStore != null) taskStore.save(state);
         return null;
@@ -267,6 +269,10 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         if (supplement != null && !supplement.isBlank()) {
             sb.append("User supplement:\n").append(supplement).append("\n\n");
         }
+        String progress = renderProgressSoFar(state);
+        if (!progress.isEmpty()) {
+            sb.append("Progress so far:\n").append(progress).append("\n\n");
+        }
         sb.append("Execution plan:\n").append(narrative != null ? narrative : "");
         if (inputDescs != null && !inputDescs.isEmpty()) {
             sb.append("\n\nCapability input guidance:\n");
@@ -288,6 +294,37 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             plan.getFinalAnswerRequirements().forEach(req -> sb.append("- ").append(req).append("\n"));
         }
         return sb.toString();
+    }
+
+    /**
+     * What actually happened in earlier rounds — earlyRoundsSummary (older rounds, already
+     * compacted by Reflector) + the still-raw tool calls from state.toolExecutions belonging to
+     * rounds before this one. Individual results are already bounded at the source (BashTool/
+     * McpTools' ToolOutputOverflow, in regnexe-cli), so no extra per-entry capping here.
+     */
+    private String renderProgressSoFar(TaskExecutionState state) {
+        StringBuilder sb = new StringBuilder();
+        if (state.getEarlyRoundsSummary() != null && !state.getEarlyRoundsSummary().isBlank()) {
+            sb.append(state.getEarlyRoundsSummary()).append("\n\n");
+        }
+        List<ToolExecutionRecord> all = state.getToolExecutions();
+        if (all == null || all.isEmpty()) return sb.toString().trim();
+
+        int currentRound = state.getCurrentRound();
+        int lastRound = -1;
+        for (ToolExecutionRecord record : all) {
+            if (record.getRound() >= currentRound) continue; // this round hasn't happened yet
+            if (record.getRound() != lastRound) {
+                sb.append("Round ").append(record.getRound()).append(":\n");
+                lastRound = record.getRound();
+            }
+            sb.append("- ").append(record.getToolName());
+            if (record.getArguments() != null && !record.getArguments().isBlank()) {
+                sb.append(" ").append(record.getArguments());
+            }
+            sb.append(" -> ").append(record.getObservation()).append("\n");
+        }
+        return sb.toString().trim();
     }
 
     /**
@@ -596,11 +633,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             return observation;
         }
         return toolCallLabel + " -> " + observation;
-    }
-
-    private RoundRecord currentRound(TaskExecutionState state) {
-        List<RoundRecord> rounds = state.getRounds();
-        return rounds.get(rounds.size() - 1);
     }
 
     @Override

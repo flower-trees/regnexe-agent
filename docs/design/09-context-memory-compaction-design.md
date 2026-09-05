@@ -1,6 +1,8 @@
 # 上下文/记忆压缩设计：从"硬截断"到"分级压缩"
 
-- 状态：**讨论中，逐块过——本次先看第一部分**
+> **后续进展**：① 部分点名的硬截断（`Reflector.capText()`/`ExecutionRecordFormatter`）已经整个移除，不是改成更聪明的截断——`ExecutionRecordFormatter` 类已删除，`resume` 整条链路也一并删除（见 CLI `--resume`/`--force-resume`/`--continue` 移除记录）。单次工具结果太大的问题由 10 号文档（tmp 文件 + 指针）解决；"轮次太多"（Plan B）由 11 号文档（`toolExecutions` 拍平成任务级共享列表 + 批量压缩）解决，取代了本文档②③部分设想的 `roundsSummary`/`roundsSummaryThroughRound` 两个字段方案。本文档保留作为问题排查过程的记录。
+
+- 状态：**讨论已收敛，方案见 10/11 号文档**
 - 涉及仓库：`regnexe-agent`（`ExecutionRecordFormatter`/`Reflector`/`TaskPlanner`/`RegnexeAgent`）、`regnexe-cli`（`BashTool`/`FileTools`/`McpTools`）、`j-langchain`（`McpAgentExecutor`）
 - 关联文档：延续 08 号文档（`finalText`/`roundSummary` 拆分）——08 号解决的是"轮次交接读哪个字段"，本文档解决"读到的内容本身太大/被砍得太狠"
 - 背景：`salt-robot-skills` 资讯写作任务真实跑到第 9 轮时，Planner 的 prompt 撑爆了 harness-punchbag-pro 的上下文上限（`Total tokens ... exceed max message tokens`），排查过程中发现问题不止一处——现有代码里有好几处独立的字符截断逻辑，且大多是"从头硬切"，跟 08 号文档当初要修的 120 字符截断是同一类毛病，只是发生在不同位置。

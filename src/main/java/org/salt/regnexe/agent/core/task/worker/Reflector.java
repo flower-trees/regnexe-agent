@@ -28,18 +28,22 @@ import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
+import org.salt.regnexe.agent.core.common.util.RoundRecords;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
-import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
+import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.llm.BaseChatModel;
+import org.salt.jlangchain.core.message.BaseMessage;
+import org.salt.jlangchain.core.message.MessageType;
 import org.salt.jlangchain.core.parser.StrOutputParser;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
 import org.salt.jlangchain.core.prompt.chat.ChatPromptTemplate;
+import org.salt.jlangchain.core.prompt.value.ChatPromptValue;
 
 import java.util.List;
 import java.util.Map;
@@ -69,23 +73,12 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
               If the result deviates — e.g. the setting changes, named entities disappear, or required \
               items are replaced wholesale — action should be CONTINUE, not FINISH. Describe the deviation \
               in planAdjustment.
-            - roundSummary is a hand-off note for the NEXT round's planner, not a user-facing answer. \
-              Base it on the Execution result below. It should \
-              let the next round skip redoing finished work and go straight to fixing what's broken. \
-              Cover three things concisely: (1) concrete artifacts already produced this round — files \
-              written, records committed, research already gathered, with enough specificity (ids, \
-              filenames, search topics already covered) that the next round recognizes it doesn't need \
-              to redo them; (2) if something failed, the SPECIFIC cause (e.g. the exact error type/line, \
-              not just "an error occurred") — this is what lets the next round fix the one broken thing \
-              instead of restarting everything; (3) what concretely remains. Always non-null, even on \
-              FINISH/ESCALATE (a short "what was accomplished" note still has value there).
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
             {
               "action": "FINISH" | "CONTINUE" | "ESCALATE",
               "reason": "<why>",
-              "roundSummary": "<hand-off note for the next round, see rule above>",
               "hintForNext": null | {
                 "requestResearch": false,
                 "searchDirection": null,
@@ -136,7 +129,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
                 execText != null ? execText : "(no execution output)"));
 
         // Pre-LLM guard: catch structurally incomplete rounds before the LLM can hallucinate completion.
-        RoundRecord roundRecord = currentRound(state);
+        RoundRecord roundRecord = RoundRecords.current(state);
         ReflectionDecision decision = evaluateGuardRules(roundRecord, state);
         if (decision != null) {
             log.warn("Round {}: guard rule forced {} — {}", roundNum, decision.getAction(), decision.getReason());
@@ -161,6 +154,14 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
                 decision.getAction() + " — " + decision.getReason()));
         log.debug("Round {}: reflection = {}, reason = {}",
                 state.getCurrentRound(), decision.getAction(), decision.getReason());
+
+        // Batch compaction (see docs/design/11-round-context-sharing-design.md) — checked once
+        // per round, mirrors PeriodicConversationSummaryMemoryStorer's shape: accumulate raw
+        // until a threshold, then compress the whole batch in one call and clear it, rather than
+        // compressing one entry every single time the window overflows (too many LLM calls over
+        // a long task). Runs before the save below so the compacted state is what gets persisted.
+        ModelSpec defaultModel = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        compactToolExecutionsIfNeeded(state, chainActor, llmProvider, defaultModel);
 
         if (taskStore != null) taskStore.save(state);
         return null;
@@ -192,19 +193,16 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         // own output and once to CapabilityExecutor — a third copy here added cost with no signal.
 
         // Inject factual tool execution count so the LLM cannot hallucinate completion from zero executions.
-        ExecutionOutput exec = round.getExecutionResult();
-        int toolCount = (exec != null && exec.getToolExecutions() != null) ? exec.getToolExecutions().size() : 0;
+        int toolCount = toolCountForRound(state, round.getRoundNumber());
         sb.append("Tools executed this round: ").append(toolCount).append("\n\n");
 
         sb.append("Execution result:\n");
         sb.append(execText != null ? execText : "(no output)").append("\n\n");
 
-        // Deliberately judging from execText (≈finalText) alone again, not the round's full
-        // tool_executions list — see docs/design/09-context-memory-compaction-design.md. The 08
-        // redesign added reading the full list here specifically to stop Reflector trusting a
-        // stale/misleading finalText; going back to finalText-only reintroduces that same risk
-        // (a queried old record could again be misjudged as this round's new output) as a known,
-        // deliberate trade-off for now, in exchange for a bounded prompt.
+        // Judging from execText (≈finalText) — the round's full tool-call log lives in
+        // state.toolExecutions (see docs/design/11-round-context-sharing-design.md) but Reflector
+        // doesn't need call-by-call detail to judge FINISH/CONTINUE/ESCALATE, just whether
+        // anything ran (toolCount above) and what the round claims it produced (execText).
         List<RoundRecord> rounds = state.getRounds();
         if (rounds.size() > 1) {
             sb.append("This is round ").append(state.getCurrentRound())
@@ -222,23 +220,17 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
      */
     private ReflectionDecision evaluateGuardRules(RoundRecord round, TaskExecutionState state) {
         PlanOutput plan = round.getPlan();
-        ExecutionOutput exec = round.getExecutionResult();
 
         boolean capsSelected = plan != null
                 && plan.getSelectedCapabilityIds() != null
                 && !plan.getSelectedCapabilityIds().isEmpty();
-        boolean noToolsRan = exec == null
-                || exec.getToolExecutions() == null
-                || exec.getToolExecutions().isEmpty();
+        boolean noToolsRan = toolCountForRound(state, round.getRoundNumber()) == 0;
 
         if (capsSelected && noToolsRan) {
             int capsCount = plan.getSelectedCapabilityIds().size();
             ReflectionDecision decision = new ReflectionDecision();
             decision.setAction(ReflectionAction.CONTINUE);
             decision.setReason("Guard: " + capsCount + " capabilities selected but no tools executed this round");
-            // No LLM call on this path — reuse reason verbatim rather than spending a call just to
-            // rephrase it. Nothing was produced this round, so there's nothing else to report.
-            decision.setRoundSummary(decision.getReason());
             ReflectionHint hint = new ReflectionHint();
             hint.setPlanAdjustment(
                     "No tools ran despite " + capsCount + " capabilities being selected. "
@@ -250,6 +242,16 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         return null;
     }
 
+    private int toolCountForRound(TaskExecutionState state, int roundNumber) {
+        List<ToolExecutionRecord> all = state.getToolExecutions();
+        if (all == null) return 0;
+        int count = 0;
+        for (ToolExecutionRecord r : all) {
+            if (r.getRound() == roundNumber) count++;
+        }
+        return count;
+    }
+
     private ReflectionDecision parseDecision(String text) {
         try {
             String json = extractJson(text);
@@ -257,18 +259,12 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             if (decision.getAction() == null) {
                 decision.setAction(ReflectionAction.ESCALATE);
             }
-            if (decision.getRoundSummary() == null || decision.getRoundSummary().isBlank()) {
-                // Model produced valid JSON but skipped the field — never leave it null, the next
-                // round's Planner unconditionally reads it (see TaskPlanner's history section).
-                decision.setRoundSummary(decision.getReason());
-            }
             return decision;
         } catch (Exception e) {
             log.warn("Failed to parse ReflectionDecision, defaulting to ESCALATE: {}", e.getMessage());
             ReflectionDecision fallback = new ReflectionDecision();
             fallback.setAction(ReflectionAction.ESCALATE);
             fallback.setReason("parse error: " + e.getMessage());
-            fallback.setRoundSummary("Reflector output could not be parsed: " + e.getMessage());
             return fallback;
         }
     }
@@ -282,9 +278,71 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         return text;
     }
 
-    private RoundRecord currentRound(TaskExecutionState state) {
-        List<RoundRecord> rounds = state.getRounds();
-        return rounds.get(rounds.size() - 1);
+    // How many rounds' worth of raw tool_executions to accumulate before compacting the whole
+    // batch into earlyRoundsSummary — batched (like PeriodicConversationSummaryMemoryStorer), not
+    // rolling (like SlidingWindowContext), since a task can run far more rounds than one round's
+    // internal tool-call loop ever does; compressing on every single overflow would be too many
+    // LLM calls over a long task. See docs/design/11-round-context-sharing-design.md.
+    private static final int ROUND_COMPACT_PERIOD = 5;
+
+    private static final String COMPACT_SYSTEM_PROMPT =
+            "Progressively summarize the task's tool-call history provided, merging it with the "
+            + "existing summary and returning a new concise summary. Preserve concrete artifacts "
+            + "already produced (files written, records committed, ids), specific failure causes, "
+            + "and what remains. Reply with only the new summary text.";
+
+    private void compactToolExecutionsIfNeeded(TaskExecutionState state, ChainActor chainActor,
+                                               ModelProvider llmProvider, ModelSpec defaultModel) {
+        List<ToolExecutionRecord> all = state.getToolExecutions();
+        if (all == null || all.isEmpty()) return;
+        int minRound = all.stream().mapToInt(ToolExecutionRecord::getRound).min().orElse(state.getCurrentRound());
+        if (state.getCurrentRound() - minRound + 1 < ROUND_COMPACT_PERIOD) return;
+
+        String batchText = renderForCompaction(all);
+        String existing = state.getEarlyRoundsSummary();
+        String updated;
+        if (defaultModel == null) {
+            updated = concatSummary(existing, batchText);
+        } else {
+            try {
+                BaseChatModel llm = llmProvider.provide(defaultModel);
+                String userContent = (existing == null || existing.isBlank() ? "" : "Existing summary:\n" + existing + "\n\n")
+                        + "New rounds:\n" + batchText;
+                ChatPromptValue prompt = ChatPromptValue.builder()
+                        .messages(List.of(
+                                BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), COMPACT_SYSTEM_PROMPT),
+                                BaseMessage.fromMessage(MessageType.HUMAN.getCode(), userContent)))
+                        .build();
+                String result = llm.invoke(prompt).getContent();
+                updated = (result != null && !result.isBlank()) ? result : concatSummary(existing, batchText);
+            } catch (Exception e) {
+                log.warn("Round compaction summarization failed, falling back to concatenation: {}", e.getMessage());
+                updated = concatSummary(existing, batchText);
+            }
+        }
+        state.setEarlyRoundsSummary(updated);
+        all.clear();
+    }
+
+    private static String concatSummary(String existing, String newText) {
+        return (existing == null || existing.isBlank()) ? newText : existing + "\n" + newText;
+    }
+
+    private String renderForCompaction(List<ToolExecutionRecord> records) {
+        StringBuilder sb = new StringBuilder();
+        int lastRound = -1;
+        for (ToolExecutionRecord r : records) {
+            if (r.getRound() != lastRound) {
+                sb.append("Round ").append(r.getRound()).append(":\n");
+                lastRound = r.getRound();
+            }
+            sb.append("- ").append(r.getToolName());
+            if (r.getArguments() != null && !r.getArguments().isBlank()) {
+                sb.append(" ").append(r.getArguments());
+            }
+            sb.append(" -> ").append(r.getObservation()).append("\n");
+        }
+        return sb.toString();
     }
 
     @Override

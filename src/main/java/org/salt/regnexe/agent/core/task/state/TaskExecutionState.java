@@ -17,6 +17,7 @@ package org.salt.regnexe.agent.core.task.state;
 import lombok.Data;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilitySearchResult;
+import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
 
 import java.util.List;
 import java.util.Map;
@@ -54,6 +55,18 @@ public class TaskExecutionState {
     private List<CapabilitySearchResult> searchResults;
 
     private List<RoundRecord> rounds;
+
+    /**
+     * Every tool call across the whole task, flat — not nested per-round (see
+     * docs/design/11-round-context-sharing-design.md). Each entry already self-identifies its
+     * round via {@link ToolExecutionRecord#getRound()}, so there's no need to bury it inside
+     * RoundRecord.executionResult. Compacted periodically: once it spans more than a threshold
+     * number of rounds, the whole batch is summarized into earlyRoundsSummary and cleared.
+     */
+    private List<ToolExecutionRecord> toolExecutions;
+
+    /** Rolling summary of tool calls already compacted out of {@link #toolExecutions}. */
+    private String earlyRoundsSummary;
 
     /**
      * Last top-level tool result produced by the current execution.
