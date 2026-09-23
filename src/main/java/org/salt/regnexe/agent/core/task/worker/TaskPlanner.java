@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.common.util.RoundRecords;
 import org.salt.regnexe.agent.core.event.AgentEvent;
@@ -29,8 +30,8 @@ import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilityCandidate;
+import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
-import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
@@ -85,19 +86,8 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - UNIQUE IDs: selectedCapabilityIds must contain each capability ID at most once. \
               If the goal involves conditional retries (e.g. "if QC fails, retry"), list the capability \
               once — the executor agent will call it again as needed based on the narrative.
-            - RESUME CONTEXT: When previous execution records are provided, use them as completed evidence. \
-              If those records already contain enough information to satisfy the goal and supplement, you may \
-              set selectedCapabilityIds to an empty array and instruct the executor to answer from the existing \
-              records without calling tools again.
-            - RESULT STRATEGY: Choose resultStrategy based on the user's deliverable semantics:
-              * RETURN_LAST: use only when the final selected capability is expected to produce the complete \
-                user-facing answer and earlier capability results are merely intermediate inputs.
-              * SYNTHESIZE: use when the user asks for multiple deliverables, multiple independent tasks, \
-                comparisons, a combined report, or when outputs from more than one capability must appear \
-                in the final answer.
             - FINAL ANSWER REQUIREMENTS: list the concrete user-facing items the executor's final answer \
-              must include. For SYNTHESIZE, include every required deliverable. For RETURN_LAST, include \
-              the single complete deliverable expected from the final capability.
+              must include — every deliverable the round is expected to produce.
             - ITERATIONS HINT: Estimate how many executor iterations this plan will need and set \
               iterationsHint accordingly. Use these per-operation costs as a guide:
               * Each file read (read_file, list_files, search_files): ~2 iterations
@@ -120,7 +110,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 "<id1>": "<what to pass as input to this capability>",
                 "<id2>": "<what to pass; may reference the output of id1>"
               },
-              "resultStrategy": "<use exactly RETURN_LAST or SYNTHESIZE>",
               "finalAnswerRequirements": ["<required item 1>", "<required item 2>"],
               "iterationsHint": <integer or null>
             }
@@ -130,8 +119,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
     private static final int MAX_PLAN_RETRIES = 2;
     private static final int MAX_SAFE_ITERATIONS = 200;
-    /** How many completed rounds' finalText to show in "Progress so far". */
-    private static final int RECENT_ROUNDS_WINDOW = 3;
     private static final String PARSE_ERROR_CORRECTION =
             "[PARSE ERROR] Your previous response was not valid JSON. " +
             "Do NOT output XML, markdown, tool-call syntax, or any other format. " +
@@ -178,12 +165,14 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
 
         boolean hasCandidates = candidates != null && !candidates.isEmpty();
-        // Session history (turns from before this task started) is only informative on the
-        // first round. From round 2 onward, lastHint()/"Previous round summary" in
-        // buildChatPrompt already carry the task's own progress, so re-sending the same
-        // pre-task history every round is pure repeated prefill cost with no new information.
+        // Session history is normally only sent on round 1 — from round 2 on, this round's own
+        // "Progress so far" carries the same signal more cheaply. But if round 1 crashes before
+        // Execute ever runs, round 2 gets neither the history nor real task progress, and can lose
+        // track of what a short follow-up goal (e.g. "continue") even refers to. So keep resending
+        // history every round until the task has at least one round that actually completed.
         boolean isFirstRound = round == 1;
-        boolean hasHistory = isFirstRound && sessionHistory != null && !sessionHistory.isEmpty();
+        boolean hasHistory = sessionHistory != null && !sessionHistory.isEmpty()
+                && (isFirstRound || noRoundSucceededYet(state));
 
         PlanOutput plan;
         if (!hasCandidates) {
@@ -192,7 +181,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             plan = new PlanOutput();
             plan.setSelectedCapabilityIds(List.of());
             plan.setNarrative("No tools available. Provide a direct answer to the goal.");
-            plan.setResultStrategy(ResultStrategy.SYNTHESIZE);
             plan.setFinalAnswerRequirements(List.of());
             normalizePlan(plan);
         } else {
@@ -208,9 +196,20 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             plan = null;
             String lastRaw = null;
             for (int attempt = 0; attempt <= MAX_PLAN_RETRIES; attempt++) {
-                ChatGeneration gen = chainActor.invoke(flow,
-                        ChatPromptValue.builder().messages(messages).build());
-                lastRaw = gen.getText();
+                // A call failure (network/HTTP) is a different failure mode from a parse failure
+                // below, but reuses the same retry budget — worth one more attempt before falling
+                // through to recoverPlan()'s deterministic, LLM-free fallback.
+                String gen;
+                try {
+                    ChatGeneration callResult = chainActor.invoke(flow,
+                            ChatPromptValue.builder().messages(messages).build());
+                    gen = callResult.getText();
+                } catch (Exception e) {
+                    log.warn("Round {}: plan call failed on attempt {}/{}: {}",
+                            round, attempt + 1, MAX_PLAN_RETRIES + 1, e.getMessage());
+                    continue;
+                }
+                lastRaw = gen;
                 plan = tryParsePlan(lastRaw);
                 if (plan != null) break;
                 if (attempt < MAX_PLAN_RETRIES) {
@@ -239,28 +238,13 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         bus.putTransmit(ContextBusKeys.SELECTED_CAPS, plan.getSelectedCapabilityIds());
         bus.putTransmit(ContextBusKeys.CAPABILITY_INPUT_DESCS, plan.getCapabilityInputDescriptions());
 
-        // Apply iterationsHint: set THIS round's maxAgentIterations from the plan's own estimate,
-        // in EITHER direction — not just upward. Originally this only ever raised the ceiling
-        // (hint > current), on the theory that a simple round could just fall back to the global
-        // default's ample room. In practice that meant a round the Planner itself estimated at,
-        // say, 8 iterations still got the full configured default (60 in one real case) to keep
-        // going — including after the goal was already achieved, because nothing ever narrowed
-        // the room back down. A real incident: after a genuinely-complete two-step DB commit
-        // (insert + narrow, both verified via readback), the executor kept calling tools —
-        // re-verifying with a wrong path, wandering into an unrelated filesystem search — for
-        // several more iterations, because 60 was still the ceiling and Reflector (which could
-        // have caught this) only runs once the round's own tool-calling loop stops on its own.
-        //
-        // Always computed relative to defaultIterations (the untouched original config value),
-        // never relative to whatever MAX_AGENT_ITERATIONS currently holds — that may already be
-        // a previous round's override in this same task, and compounding a stale override with a
-        // new one (instead of resetting from the real baseline each round) would drift further
-        // from what this specific round actually needs.
-        //
-        // The hint is a best-effort LLM estimate, not a guarantee — retries, extra confirmations,
-        // and unexpected tool needs all eat into it — so a flat 30% margin is applied before it
-        // becomes a hard ceiling, rather than truncating a genuinely-in-progress round right when
-        // Reflector's own zero-tool-executions guard would otherwise let it finish naturally.
+        // Set this round's maxAgentIterations from the plan's own estimate, in either direction —
+        // not just upward. A hint below the default should tighten the ceiling too, otherwise a
+        // simple round keeps the full default room even after its goal is met and the executor
+        // wanders into unnecessary extra tool calls. Always computed relative to defaultIterations
+        // (the untouched config value), not whatever MAX_AGENT_ITERATIONS currently holds, since
+        // that may already carry a previous round's override. A flat 30% margin absorbs retries
+        // and extra confirmations the estimate didn't account for.
         if (plan.getIterationsHint() != null && plan.getIterationsHint() > 0) {
             int hint = Math.min(plan.getIterationsHint(), MAX_SAFE_ITERATIONS);
             int hintWithMargin = (int) Math.ceil(hint * 1.3);
@@ -282,7 +266,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
         listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
                 "Selected: " + plan.getSelectedCapabilityIds()
-                + " | Strategy: " + plan.getResultStrategy()
                 + " | " + plan.getNarrative()));
         log.debug("Round {}: plan produced, selected caps: {}",
                 state.getCurrentRound(), plan.getSelectedCapabilityIds());
@@ -321,11 +304,15 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             systemSb.append("\n\n---\n\nProject memory:\n").append(projectMemory);
         }
 
+        // Labeled explicitly here rather than trusting the content to already say what it is —
+        // PeriodicConversationSummaryMemoryStorer happens to prefix its own summaries with
+        // "Conversation summary: ", but that's a convention of one ConversationMemory
+        // implementation, not a guarantee of HistoryInfos.Type.SUMMARY itself.
         if (sessionHistory != null) {
             for (HistoryInfos h : sessionHistory) {
                 if (h.getType() == HistoryInfos.Type.SUMMARY) {
                     for (BaseMessage msg : h.getMessages()) {
-                        systemSb.append("\n\n").append(msg.getContent());
+                        systemSb.append("\n\nSession summary:\n").append(msg.getContent());
                     }
                 }
             }
@@ -366,11 +353,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         StringBuilder humanSb = new StringBuilder();
         humanSb.append("Goal: ").append(state.getRequest().getGoal());
 
-        String supplement = state.getRequest().getSupplementInput();
-        if (supplement != null && !supplement.isBlank()) {
-            humanSb.append("\n\n== User supplement ==\n").append(supplement);
-        }
-
         ReflectionHint lastHint = lastHint(state);
         if (lastHint != null) {
             humanSb.append("\n\nGuidance from previous round:");
@@ -385,18 +367,16 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             }
         }
 
-        // Recent-round progress. Two parts, see docs/design/11-round-context-sharing-design.md:
-        // earlyRoundsSummary (older rounds, already compacted — see Reflector's periodic batch
-        // compaction of TaskExecutionState.toolExecutions) + each recent round's own finalText
-        // (Execute's own concise answer — the raw tool-call log itself lives in
-        // state.toolExecutions now, not here; TaskPlanner doesn't need call-by-call detail).
+        // Recent-round progress: every completed round's own finalText, unbounded — it's already
+        // Execute's own synthesized answer (short, human-readable), not raw tool-call data, so
+        // keeping the full history costs little. priorStepsSummary (Execute's own tool-step
+        // compaction) is deliberately not read here: it's tuned for Execute's own continuity, not
+        // Planner's decision-making, and is only ever populated when a SlidingWindowContext is
+        // configured and has actually triggered — an unreliable, wrong-audience signal now that
+        // finalText coverage is unbounded.
         StringBuilder progressSb = new StringBuilder();
-        if (state.getEarlyRoundsSummary() != null && !state.getEarlyRoundsSummary().isBlank()) {
-            progressSb.append("\n\nEarlier rounds (compacted):\n").append(state.getEarlyRoundsSummary());
-        }
         List<RoundRecord> rounds = state.getRounds();
-        int from = Math.max(0, rounds.size() - 1 - RECENT_ROUNDS_WINDOW);
-        for (int i = from; i < rounds.size() - 1; i++) {
+        for (int i = 0; i < rounds.size() - 1; i++) {
             RoundRecord r = rounds.get(i);
             String summary = r.getExecutionResult() != null ? r.getExecutionResult().getFinalText() : null;
             if (summary != null && !summary.isBlank()) {
@@ -438,8 +418,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                     recovery.setNarrative("[Recovery: reusing plan from round " + (i + 1) + "]\n" + prev.getNarrative());
                     recovery.setSelectedCapabilityIds(new ArrayList<>(prev.getSelectedCapabilityIds()));
                     recovery.setCapabilityInputDescriptions(prev.getCapabilityInputDescriptions());
-                    recovery.setResultStrategy(prev.getResultStrategy() != null
-                            ? prev.getResultStrategy() : ResultStrategy.SYNTHESIZE);
                     recovery.setFinalAnswerRequirements(prev.getFinalAnswerRequirements());
                     log.warn("Plan recovery: reusing round-{} plan", i + 1);
                     return recovery;
@@ -454,7 +432,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 candidates.stream().map(CapabilityCandidate::getCapabilityId)
                         .collect(java.util.stream.Collectors.toList());
         minimal.setSelectedCapabilityIds(allIds);
-        minimal.setResultStrategy(ResultStrategy.SYNTHESIZE);
         minimal.setFinalAnswerRequirements(List.of());
         return minimal;
     }
@@ -466,9 +443,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         }
         if (plan.getCapabilityInputDescriptions() == null) {
             plan.setCapabilityInputDescriptions(java.util.Collections.emptyMap());
-        }
-        if (plan.getResultStrategy() == null) {
-            plan.setResultStrategy(ResultStrategy.SYNTHESIZE);
         }
         if (plan.getFinalAnswerRequirements() == null) {
             plan.setFinalAnswerRequirements(List.of());
@@ -575,6 +549,20 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             }
         }
         return null;
+    }
+
+    /** True if no round before the current one ever completed Execute without crashing. */
+    private boolean noRoundSucceededYet(TaskExecutionState state) {
+        List<RoundRecord> rounds = state.getRounds();
+        if (rounds == null) return true;
+        for (RoundRecord r : rounds) {
+            if (r.getRoundNumber() == state.getCurrentRound()) continue; // this round, not yet run
+            ExecutionOutput exec = r.getExecutionResult();
+            if (exec != null && exec.getStatus() == ExecutionStatus.SUCCESS) {
+                return false;
+            }
+        }
+        return true;
     }
 
 

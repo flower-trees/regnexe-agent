@@ -28,18 +28,18 @@ import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.marketplace.Marketplace;
 import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
 import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
-import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.agent.AgentAbortException;
 import org.salt.jlangchain.core.agent.AgentStoppedException;
 import org.salt.jlangchain.core.agent.McpAgentExecutor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
+import org.salt.jlangchain.core.agent.memory.AgentStep;
+import org.salt.jlangchain.core.agent.memory.AgentTaskContext;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
 import org.salt.jlangchain.core.skill.ReferenceDoc;
@@ -66,6 +66,8 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Slf4j
 public class CapabilityExecutor extends FlowNode<Object, Object> implements Worker {
+
+    private static final int MAX_EXECUTE_RETRIES = 2;
 
     private volatile McpAgentExecutor mcpAgentExecutor;
 
@@ -101,39 +103,29 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         int round = state.getCurrentRound();
         String taskId = state.getTaskId();
         state.setLastToolResult(null);
-        // Flat, task-wide list (see docs/design/11-round-context-sharing-design.md) — every tool
-        // call across the whole task appends directly here, not into a per-round local list that
-        // gets copied in at the end. ToolExecutionRecord.round self-identifies which round each
-        // entry belongs to.
-        if (state.getToolExecutions() == null) {
-            state.setToolExecutions(new ArrayList<>());
-        }
-        List<ToolExecutionRecord> toolExecutions = state.getToolExecutions();
+        // This round's own tool calls only — labeled and scoped to this round, for the live event
+        // log and Reflector's cross-check. Cross-round history is a separate concern, carried by
+        // the shared AgentTaskContext built below (state.priorSteps/priorStepsSummary).
+        List<ToolExecutionRecord> toolExecutions = new ArrayList<>();
 
         List<Tool> mcpTools = new ArrayList<>();
         List<SubAgent> subAgents = new ArrayList<>();
-        // Skill instructions merged into this round's shared executor (see resolveCapabilities()
-        // SKILL branch) — one entry per selected skill, folded into agentInput below instead of
-        // a separate systemPrompt slot, since CapabilityExecutor's outer McpAgentExecutor has
-        // none.
+        // One entry per selected skill (see resolveCapabilities() SKILL branch), folded into
+        // agentInput below instead of a separate systemPrompt slot — McpAgentExecutor has none.
         List<String> skillSystemPrompts = new ArrayList<>();
-        // Maps the name a capability is invoked under -> its CapabilityType, so logs can
-        // prefix each tool call with "<type>:<name>" (mcp_tool/skill/subagent). Names not
-        // present here (e.g. a sub-agent's private own-tools) get no type prefix.
+        // Name -> CapabilityType, so logs can prefix each tool call with "<type>:<name>"
+        // (mcp_tool/skill/subagent). Names not present here (e.g. a sub-agent's own tools) get
+        // no type prefix.
         Map<String, CapabilityType> typeByName = new HashMap<>();
         java.nio.file.Path claudeCompatWorkspace = bus.getTransmit(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE);
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skillSystemPrompts,
                 subAgents, maxAgentIterations, maxConsecutiveToolFailures, listener, taskId, round, verbose,
                 toolExecutions, typeByName, claudeCompatWorkspace, baseToolNames);
 
-        // Best-effort attribution for the shared loop's tool-call log: unlike a SubAgent (its own
-        // isolated executor, so its onToolCall callback naturally knows its own scope), a Skill
-        // selected here shares this one loop and tool list with everything else picked this round
-        // — there is no signal for "which skill's instructions motivated this specific call" when
-        // more than one is selected simultaneously. When exactly one is, though, attributing every
-        // call in the round to it is a reasonable approximation (this is also the overwhelmingly
-        // common case in practice — most rounds select a single skill). Falls back to no scope
-        // (today's behavior) whenever that assumption doesn't hold.
+        // Best-effort attribution for the tool-call log: a Skill shares this one loop/tool list
+        // with everything else picked this round, so there's no real signal for which skill's
+        // instructions motivated a given call. When exactly one skill is selected (the common
+        // case), attribute every call in the round to it; otherwise leave the scope unset.
         List<String> selectedSkillNames = typeByName.entrySet().stream()
                 .filter(e -> e.getValue() == CapabilityType.SKILL)
                 .map(Map.Entry::getKey)
@@ -142,8 +134,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 ? "[skill:" + selectedSkillNames.get(0) + "]" : null;
 
         PlanOutput plan = RoundRecords.current(state).getPlan();
-        ResultStrategy resultStrategy = resolveResultStrategy(plan);
-        boolean returnLastToolResult = resultStrategy == ResultStrategy.RETURN_LAST;
         AtomicReference<String> outerToolCall = new AtomicReference<>();
         McpAgentExecutor.Builder executorBuilder = McpAgentExecutor.builder(chainActor)
                 .llm(llm)
@@ -163,7 +153,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                     listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
                             formatToolResult(label, obs)));
                 })
-                .returnLastToolResult(returnLastToolResult)
                 .onTokenUsage(u -> listener.dispatch(AgentEvent.ofTokenUsage(taskId, round, u)));
         if (maxAgentIterations != null) {
             executorBuilder.maxIterations(maxAgentIterations);
@@ -175,18 +164,57 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
         this.mcpAgentExecutor = executor;
 
-        String agentInput = buildAgentInput(state, narrative, inputDescs, plan, resultStrategy,
-                projectMemory, skillSystemPrompts);
+        String agentInput = buildAgentInput(state, narrative, inputDescs, plan, projectMemory, skillSystemPrompts);
 
         listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_STARTED,
-                "Selected: " + selectedCapIds + " | Strategy: " + resultStrategy + " | " + agentInput));
+                "Selected: " + selectedCapIds + " | " + agentInput));
+
+        // Shared cross-round context: replay whatever steps/summary survived prior rounds into a
+        // fresh AgentTaskContext, then hand it to invoke() as the preloaded context instead of
+        // letting the executor create an empty one. originalTask is the overall goal (stable
+        // across rounds) — this round's own agentInput is delivered separately below via
+        // invoke()'s addHumanTurn path, so it isn't duplicated as both originalTask and a
+        // replayed turn. Compaction of old steps into priorStepsSummary happens inside this
+        // AgentTaskContext itself (e.g. SlidingWindowContext) — nothing here decides when to
+        // compact.
+        String originalTask = state.getRequest().getGoal();
+        if (originalTask == null || originalTask.isBlank()) originalTask = agentInput;
+        AgentTaskContext ctx = agentContext.create(originalTask, null);
+        String priorSummary = state.getPriorStepsSummary();
+        if (priorSummary != null && !priorSummary.isBlank()) {
+            ctx.restoreSummary(priorSummary);
+        }
+        List<AgentStep> priorSteps = state.getPriorSteps();
+        if (priorSteps != null) {
+            priorSteps.forEach(ctx::addStep);
+        }
 
         ExecutionOutput output = new ExecutionOutput();
         try {
-            ChatGeneration result = executor.invoke(agentInput, stopSignal);
-            String executionText = returnLastToolResult && state.getLastToolResult() != null
-                    ? state.getLastToolResult()
-                    : result.getText();
+            // Retries the WHOLE tool-calling loop, unlike Planner/Reflector's retry (a single
+            // stateless LLM call, safe to just redo). This one can have already-committed side
+            // effects (a write_file, a db insert) before the failure — replaying from the original
+            // input risks a duplicate write. Reusing the same ctx across attempts softens that: a
+            // retry after a partial failure sees its own earlier steps already in the transcript,
+            // so it's less likely to redo work that already succeeded. Accepted for now: a failure
+            // that kills the round outright already loses that same progress today (Reflector sees
+            // this round's own tool calls and can tell CONTINUE to redo only what's missing), so a
+            // bounded retry trades a small duplicate-write risk for a real chance of avoiding that
+            // round-level do-over.
+            ChatGeneration result = null;
+            for (int attempt = 0; ; attempt++) {
+                try {
+                    result = executor.invoke(agentInput, stopSignal, ctx);
+                    break;
+                } catch (AgentStoppedException | AgentAbortException e) {
+                    throw e;
+                } catch (Exception e) {
+                    if (attempt >= MAX_EXECUTE_RETRIES) throw e;
+                    log.warn("Round {}: execute call failed on attempt {}/{}, retrying: {}",
+                            round, attempt + 1, MAX_EXECUTE_RETRIES + 1, e.getMessage());
+                }
+            }
+            String executionText = result.getText();
             output.setFinalText(executionText);
             output.setStatus(ExecutionStatus.SUCCESS);
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
@@ -201,13 +229,10 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             log.debug("Round {}: execution paused", state.getCurrentRound());
         } catch (AgentAbortException e) {
             output.setStatus(ExecutionStatus.FAILED);
-            // Deliberately NOT the rich "Incomplete(...) Last known result: ..." text this used to
-            // be: that diagnostic detail (with j-langchain's own 120-char-truncated tool-call
-            // trailer baked into e.getMessage()) isn't what downstream planning reads. finalText
-            // only needs to be a short, honest marker; the round's real tool-call detail already
-            // lives in state.toolExecutions (recorded as it happened, not reconstructed here). The
-            // rich e.getMessage() text still reaches the live event log two lines below, unchanged
-            // — that's a different audience (a human watching in real time) with different needs.
+            // finalText is a short, honest marker, not a reconstruction of what happened — the
+            // round's real tool-call detail already lives in this round's ExecutionOutput.toolExecutions
+            // (and the shared ctx persisted below). The full e.getMessage() still reaches the live
+            // event log two lines below, for a human watching in real time.
             output.setFinalText("Round " + round + " incomplete: iteration budget ("
                     + (maxAgentIterations != null ? maxAgentIterations : "?") + " steps) exceeded.");
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
@@ -222,6 +247,17 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         } finally {
             this.mcpAgentExecutor = null;
         }
+        output.setToolExecutions(toolExecutions);
+
+        // Unconditional — success or failure — so next round replays whatever steps actually
+        // completed before a failure, instead of starting over with nothing. ctx is the same
+        // object McpAgentExecutor mutated internally (addStep/compaction), whether invoke()
+        // returned normally or threw.
+        state.setPriorSteps(new ArrayList<>(ctx.getCompletedSteps()));
+        String updatedSummary = ctx.getEarlyStepsSummary();
+        if (updatedSummary != null) {
+            state.setPriorStepsSummary(updatedSummary);
+        }
 
         // Unconditional — success or failure — so Reflector never reads a stale value left over
         // from an earlier round (previously this was only set in the success branch).
@@ -233,28 +269,16 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         return null;
     }
 
-    private ResultStrategy resolveResultStrategy(PlanOutput plan) {
-        if (plan == null || plan.getResultStrategy() == null) {
-            return ResultStrategy.SYNTHESIZE;
-        }
-        return plan.getResultStrategy();
-    }
-
     private String buildAgentInput(TaskExecutionState state, String narrative, Map<String, String> inputDescs,
-                                   PlanOutput plan, ResultStrategy resultStrategy,
-                                   String projectMemory, List<String> skillSystemPrompts) {
+                                   PlanOutput plan, String projectMemory, List<String> skillSystemPrompts) {
         StringBuilder sb = new StringBuilder();
-        // Long-term project memory (REX.md) — same content the Planner already saw in its own
-        // system prompt; repeated here so the Execute-phase LLM (a separate call/loop) also has
-        // it, since this agentInput string is its only prompt (CapabilityExecutor's outer
-        // McpAgentExecutor has no separate systemPrompt slot).
+        // Long-term project memory (REX.md) — same content Planner saw, repeated here since
+        // Execute is a separate LLM call and agentInput is its only prompt (no systemPrompt slot).
         if (projectMemory != null && !projectMemory.isBlank()) {
             sb.append("Project memory:\n").append(projectMemory).append("\n\n");
         }
-        // Selected skills' instructions, merged into this same shared prompt instead of an
-        // isolated executor — each entry already carries its own "### Skill: <name>" heading
-        // (see buildSkillSystemPrompt()) so multiple skills stay distinguishable when several
-        // are selected in the same round.
+        // Each entry already carries its own "### Skill: <name>" heading (buildSkillSystemPrompt())
+        // so multiple skills selected in the same round stay distinguishable.
         if (skillSystemPrompts != null && !skillSystemPrompts.isEmpty()) {
             sb.append("Skill instructions:\n");
             for (String skillPrompt : skillSystemPrompts) {
@@ -265,14 +289,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         if (goal != null && !goal.isBlank()) {
             sb.append("Original goal:\n").append(goal).append("\n\n");
         }
-        String supplement = state.getRequest().getSupplementInput();
-        if (supplement != null && !supplement.isBlank()) {
-            sb.append("User supplement:\n").append(supplement).append("\n\n");
-        }
-        String progress = renderProgressSoFar(state);
-        if (!progress.isEmpty()) {
-            sb.append("Progress so far:\n").append(progress).append("\n\n");
-        }
         sb.append("Execution plan:\n").append(narrative != null ? narrative : "");
         if (inputDescs != null && !inputDescs.isEmpty()) {
             sb.append("\n\nCapability input guidance:\n");
@@ -280,15 +296,10 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                     sb.append("- ").append(id).append(": ").append(desc).append("\n"));
         }
         sb.append("\n\nFinal answer rule:\n")
-                .append("Be concise. ");
-        if (resultStrategy == ResultStrategy.RETURN_LAST) {
-            sb.append("If the selected capability produces a complete answer, return that answer directly. ")
-                    .append("Do not expand, reformat, or add extra detail beyond the selected capability result unless the user explicitly asks for detail.");
-        } else {
-            sb.append("Use all relevant tool results observed during execution. ")
-                    .append("Do not omit earlier capability results just because a later capability produced a long answer. ")
-                    .append("Synthesize a final answer that satisfies every final answer requirement.");
-        }
+                .append("Be concise. ")
+                .append("Use all relevant tool results observed during execution. ")
+                .append("Do not omit earlier capability results just because a later capability produced a long answer. ")
+                .append("Synthesize a final answer that satisfies every final answer requirement.");
         if (plan != null && plan.getFinalAnswerRequirements() != null && !plan.getFinalAnswerRequirements().isEmpty()) {
             sb.append("\n\nFinal answer requirements:\n");
             plan.getFinalAnswerRequirements().forEach(req -> sb.append("- ").append(req).append("\n"));
@@ -297,53 +308,17 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     }
 
     /**
-     * What actually happened in earlier rounds — earlyRoundsSummary (older rounds, already
-     * compacted by Reflector) + the still-raw tool calls from state.toolExecutions belonging to
-     * rounds before this one. Individual results are already bounded at the source (BashTool/
-     * McpTools' ToolOutputOverflow, in regnexe-cli), so no extra per-entry capping here.
-     */
-    private String renderProgressSoFar(TaskExecutionState state) {
-        StringBuilder sb = new StringBuilder();
-        if (state.getEarlyRoundsSummary() != null && !state.getEarlyRoundsSummary().isBlank()) {
-            sb.append(state.getEarlyRoundsSummary()).append("\n\n");
-        }
-        List<ToolExecutionRecord> all = state.getToolExecutions();
-        if (all == null || all.isEmpty()) return sb.toString().trim();
-
-        int currentRound = state.getCurrentRound();
-        int lastRound = -1;
-        for (ToolExecutionRecord record : all) {
-            if (record.getRound() >= currentRound) continue; // this round hasn't happened yet
-            if (record.getRound() != lastRound) {
-                sb.append("Round ").append(record.getRound()).append(":\n");
-                lastRound = record.getRound();
-            }
-            sb.append("- ").append(record.getToolName());
-            if (record.getArguments() != null && !record.getArguments().isBlank()) {
-                sb.append(" ").append(record.getArguments());
-            }
-            sb.append(" -> ").append(record.getObservation()).append("\n");
-        }
-        return sb.toString().trim();
-    }
-
-    /**
-     * Separates selected capabilities into MCP tools and SubAgents, and merges selected
-     * Skills' instructions/scripts directly into this round's shared tool list instead of
-     * spawning an isolated executor per skill. Also resolves each skill/subagent's declared
-     * allowedTools from the marketplace and adds them to mcpTools so the shared executor can
-     * call them directly.
+     * Separates selected capabilities into MCP tools and SubAgents, and merges selected Skills'
+     * instructions/scripts directly into this round's shared tool list instead of spawning an
+     * isolated executor per skill. Also resolves each skill/subagent's declared allowedTools from
+     * the marketplace into mcpTools so the shared executor can call them directly.
      *
-     * <p>Skill tool access vs SubAgent tool access is deliberately asymmetric. A Skill shares the
-     * main agent's full tool access because it runs in the same context — its own
-     * {@code allowedTools} only names extra, skill-specific tools to resolve on top of that, it
-     * does not restrict what the skill can otherwise reach. A SubAgent is the opposite — a real
-     * isolation boundary, scoped to exactly its own tools plus explicitly allowed-listed parent
-     * tools (see {@code SubAgent.collectTools()} in j-langchain: {@code ownTools + inheritedTools},
-     * nothing implicit — already correct, unchanged here). So every selected SKILL unconditionally
-     * gets {@code baseToolNames} (the tools registered directly on the agent builder, always
-     * available regardless of what any single round selects) regardless of its own allowedTools
-     * declaration; SUB_AGENT does not.
+     * <p>Skill vs SubAgent tool access is deliberately asymmetric. A Skill runs in the same
+     * context as the main agent, so it shares its full tool access — {@code allowedTools} only
+     * names extra tools to resolve on top of that. A SubAgent is a real isolation boundary,
+     * scoped to exactly its own tools plus explicitly allow-listed parent tools ({@code
+     * SubAgent.collectTools()} in j-langchain). So every selected SKILL unconditionally gets
+     * {@code baseToolNames} regardless of its own allowedTools declaration; SUB_AGENT does not.
      */
     private void resolveCapabilities(Marketplace marketplace, List<String> capIds,
                                      ChainActor chainActor, BaseChatModel llm, ModelProvider llmProvider,
@@ -356,14 +331,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                      Set<String> baseToolNames) {
         if (marketplace == null || capIds == null) return;
 
-        // Tracks tool names already present in mcpTools (from MCP_TOOL selections, skill
-        // scripts, or lazy-reference read tools) so later additions — script tools and the
-        // allowedTools reconciliation pass below — don't register a name twice.
+        // Tool names already present in mcpTools, so later additions don't register a name twice.
         Set<String> existingToolNames = new HashSet<>();
         // Tool names to resolve from the marketplace and add to mcpTools once, after the main
-        // loop: every selected skill's own declared allowedTools (extension tools specific to
-        // that skill, e.g. a plugin's own MCP_TOOL) PLUS baseToolNames (unconditional — see class
-        // javadoc above), merged with subAgents' allowedTools below into one reconciliation pass.
+        // loop: each selected skill's declared allowedTools plus baseToolNames (see class javadoc),
+        // merged with subAgents' allowedTools below into one reconciliation pass.
         Set<String> skillGrantedToolNames = new HashSet<>();
 
         Set<String> seenCapIds = new HashSet<>();
@@ -402,17 +374,13 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                 mcpTools.add(readRefTool);
                             }
                         }
-                        // Unconditional: a Skill always shares the main agent's base tool access,
-                        // regardless of its own allowedTools declaration. The
-                        // claudeCompatMode/SkillWorkspaceTools sandbox is deliberately not used on
-                        // this path.
+                        // A Skill always shares the main agent's base tool access, regardless of
+                        // its own allowedTools declaration.
                         skillGrantedToolNames.addAll(baseToolNames);
                         List<String> declaredAllowed = skillConfig.getAllowedTools();
                         if (declaredAllowed != null && !declaredAllowed.isEmpty()) {
-                            // Additional named extension tools this skill needs beyond the base set
-                            // (e.g. a plugin's own MCP_TOOL like analyze_clause) — resolved by name
-                            // from the marketplace and added to mcpTools below, same mechanism as
-                            // baseToolNames.
+                            // Extra named tools this skill needs beyond the base set — resolved by
+                            // name below, same mechanism as baseToolNames.
                             skillGrantedToolNames.addAll(declaredAllowed);
                         }
                     }
@@ -469,9 +437,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             }
         }
 
-        // Ensure each skill's granted tools (base tools + its own declared allowedTools) and each
-        // subagent's allowedTools are present in mcpTools so the shared executor (skills) /
-        // McpAgentExecutor.build() (subagents) can call/inject them correctly.
+        // Make sure each skill's granted tools and each subagent's allowedTools are present in
+        // mcpTools so the shared executor (skills) / McpAgentExecutor.build() (subagents) can
+        // call/inject them.
         Set<String> allAllowed = new HashSet<>(skillGrantedToolNames);
         subAgents.forEach(a -> allAllowed.addAll(a.getAllowedTools()));
 
@@ -488,14 +456,12 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
     }
 
     /**
-     * Builds one Skill's system-prompt-equivalent text for the shared executor: the skill's own
-     * {@code systemPrompt} plus its references (INLINE mode: full content concatenated; LAZY
-     * mode: filename+summary manifest, paired with the read_reference tool from
-     * {@link #buildReadReferenceTool}). Deliberately duplicates the relevant slice of
-     * {@code Skill.buildSystemPrompt()} (j-langchain) rather than widening that method's
-     * visibility, since that class's internals should stay untouched. Prefixed with a
-     * "### Skill: &lt;name&gt;" heading so multiple skills selected in the same round stay
-     * distinguishable in the merged prompt.
+     * Builds one Skill's system-prompt-equivalent text: its own {@code systemPrompt} plus
+     * references (INLINE mode: full content concatenated; LAZY mode: filename+summary manifest,
+     * paired with the read_reference tool from {@link #buildReadReferenceTool}). Duplicates the
+     * relevant slice of {@code Skill.buildSystemPrompt()} (j-langchain) rather than widening that
+     * method's visibility. Prefixed with a "### Skill: &lt;name&gt;" heading so multiple skills
+     * selected in the same round stay distinguishable in the merged prompt.
      */
     private String buildSkillSystemPrompt(String skillName, SkillConfig config) {
         StringBuilder sb = new StringBuilder("### Skill: ").append(skillName).append("\n");
@@ -532,8 +498,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
 
     /**
      * Mirrors {@code Skill.buildReadReferenceTool()} (j-langchain, package-private) — duplicated
-     * here for the same reason as {@link #buildSkillSystemPrompt}. Tool name is namespaced with
-     * the skill name so multiple lazy-reference skills selected in the same round don't collide.
+     * for the same reason as {@link #buildSkillSystemPrompt}. Tool name is namespaced with the
+     * skill name so multiple lazy-reference skills selected in the same round don't collide.
      */
     private Tool buildReadReferenceTool(String skillName, SkillConfig config) {
         Map<String, String> byFilename = new HashMap<>();

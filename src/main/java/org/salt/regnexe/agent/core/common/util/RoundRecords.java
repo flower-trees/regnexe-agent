@@ -25,11 +25,9 @@ public final class RoundRecords {
 
     /**
      * Returns the RoundRecord for {@code state.getCurrentRound()}, matched explicitly by
-     * {@code roundNumber} rather than assuming it's simply the last list entry — that assumption
-     * only held because {@code rounds} never used to shrink; it's no longer safe now that
-     * {@link TaskExecutionState#getToolExecutions()} (a separate, flat, task-wide list) gets
-     * periodically compacted (see docs/design/11-round-context-sharing-design.md). Was duplicated
-     * three times (CapabilityExecutor/Reflector/TaskPlanner) as {@code rounds.get(rounds.size()-1)}.
+     * {@code roundNumber} rather than assuming it's simply the last list entry — safer if
+     * {@code rounds} is ever pruned or reordered. Was duplicated three times
+     * (CapabilityExecutor/Reflector/TaskPlanner) as {@code rounds.get(rounds.size()-1)}.
      */
     public static RoundRecord current(TaskExecutionState state) {
         int roundNum = state.getCurrentRound();

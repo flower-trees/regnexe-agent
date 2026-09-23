@@ -1,6 +1,8 @@
 # 轮次上下文共享设计：工具调用记录拍平 + 批量压缩
 
-- 状态：**已实现**
+> **后续进展**：本文档描述的方案（`state.toolExecutions` 任务级共享列表 + Reflector 里的批量压缩）已被 12 号文档取代——不再自建一套平行于 `AgentTaskContext` 的历史记录/压缩机制，改为直接复用 j-langchain 的 `AgentTaskContext`（`getCompletedSteps()`/`getEarlyStepsSummary()`），跨轮只做"存取"，压缩逻辑整个下沉到 `AgentContext` 实现内部（如 `SlidingWindowContext`），regnexe 不再自己判断"该不该压"。本文档保留作为"为什么先走了拍平+批量压缩这条路"的记录。
+
+- 状态：**已被 12 号取代**
 - 涉及仓库：`regnexe-agent`（`TaskExecutionState`/`ExecutionOutput`/`ReflectionDecision`/`CapabilityExecutor`/`Reflector`/`TaskPlanner`/`DefaultResultComposer`，新增 `common/util/RoundRecords.java`）
 - 关联文档：09 号（上下文压缩）、10 号（单次工具结果溢出）——这次解决的是第三个维度："Execute 对过去几轮完全没有直接可见性"。08 号文档提出的 `roundSummary` 字段被这次的机制取代，不再需要。
 

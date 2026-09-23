@@ -17,6 +17,8 @@ package org.salt.regnexe.agent.core.task.state.execution;
 import lombok.Data;
 import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 
+import java.util.List;
+
 /**
  * Executor output for one round
  */
@@ -34,4 +36,11 @@ public class ExecutionOutput {
     private String partialContext;
 
     private ExecutionStatus status;
+
+    /**
+     * This round's own tool calls, labeled (round/type/name/arguments/observation) — scoped to
+     * just this round, unlike TaskExecutionState.priorSteps (the cross-round shared history).
+     * Read by Reflector's plan-vs-actual cross-check and the live event log.
+     */
+    private List<ToolExecutionRecord> toolExecutions;
 }
