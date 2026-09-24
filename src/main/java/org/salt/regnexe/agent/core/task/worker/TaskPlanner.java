@@ -68,10 +68,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
               capabilityInputDescriptions) or the final-answer checklist (that belongs in \
               finalAnswerRequirements).
             - CRITICAL: every capability name you mention in the narrative MUST also appear in selectedCapabilityIds.
-            - TOOL DEPENDENCIES: If a selected SKILL or SUB_AGENT lists allowedTools, you MUST also include each \
-              allowed tool id in selectedCapabilityIds. These tools are inherited dependencies for that capability; \
-              include them so the executor can make them available, but do not present them as separate top-level \
-              user tasks unless the user explicitly asked to call them directly.
+            - CAPABILITY DEPENDENCIES: If a selected SKILL or SUB_AGENT lists allowedTools, you MUST also include \
+              each allowed capability id in selectedCapabilityIds. These are inherited dependencies for that \
+              capability; include them so the executor can make them available, but do not present them as \
+              separate top-level user tasks unless the user explicitly asked to call them directly.
             - For each selected capability, write a focused input description in capabilityInputDescriptions: \
               describe what context to pass when invoking it (e.g. user goal, specific data, or the output \
               of a preceding capability). Be specific — the executor uses these descriptions to construct \

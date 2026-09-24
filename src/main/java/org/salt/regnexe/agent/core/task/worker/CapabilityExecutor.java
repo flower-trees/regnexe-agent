@@ -287,9 +287,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         }
         String goal = state.getRequest().getGoal();
         if (goal != null && !goal.isBlank()) {
-            sb.append("Original goal:\n").append(goal).append("\n\n");
+            sb.append("Goal:\n").append(goal).append("\n\n");
         }
-        sb.append("Execution plan:\n").append(narrative != null ? narrative : "");
+        sb.append("Plan:\n").append(narrative != null ? narrative : "");
         if (inputDescs != null && !inputDescs.isEmpty()) {
             sb.append("\n\nCapability input guidance:\n");
             inputDescs.forEach((id, desc) ->
@@ -297,7 +297,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         }
         sb.append("\n\nFinal answer rule:\n")
                 .append("Be concise. ")
-                .append("Use all relevant tool results observed during execution. ")
+                .append("Use all relevant capability results observed during execution. ")
                 .append("Do not omit earlier capability results just because a later capability produced a long answer. ")
                 .append("Synthesize a final answer that satisfies every final answer requirement.");
         if (plan != null && plan.getFinalAnswerRequirements() != null && !plan.getFinalAnswerRequirements().isEmpty()) {

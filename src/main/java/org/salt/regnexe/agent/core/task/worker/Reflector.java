@@ -17,7 +17,6 @@ package org.salt.regnexe.agent.core.task.worker;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.tuple.Pair;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
@@ -38,12 +37,14 @@ import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.llm.BaseChatModel;
+import org.salt.jlangchain.core.message.BaseMessage;
+import org.salt.jlangchain.core.message.MessageType;
 import org.salt.jlangchain.core.parser.StrOutputParser;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
-import org.salt.jlangchain.core.prompt.chat.ChatPromptTemplate;
+import org.salt.jlangchain.core.prompt.value.ChatPromptValue;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -99,6 +100,10 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     private static final int MAX_REFLECT_RETRIES = 2;
+    private static final String PARSE_ERROR_CORRECTION =
+            "[PARSE ERROR] Your previous response was not valid JSON. " +
+            "Do NOT output prose, markdown, or any other format. " +
+            "Output ONLY a plain JSON object matching the required schema. No ```json fences.";
 
     @Override
     public Object process(Object input) {
@@ -142,31 +147,51 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             log.warn("Round {}: guard rule forced {} — {}", roundNum, decision.getAction(), decision.getReason());
         } else {
             String userPrompt = buildPrompt(state, execText, roundRecord);
-            // Same reasoning as TaskPlanner's plan-call retry: a transient call failure (proxy
-            // backend hiccup) has a real chance of succeeding on the next attempt. If every
-            // attempt fails, fall back to an ESCALATE decision — same shape as parseDecision()'s
-            // own parse-error fallback below, just for "never got a response" instead of "got a
-            // response that didn't parse".
-            String raw = null;
+            List<BaseMessage> messages = new ArrayList<>(List.of(
+                    BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), SYSTEM_PROMPT),
+                    BaseMessage.fromMessage(MessageType.HUMAN.getCode(), userPrompt)));
+            // Same reasoning as TaskPlanner's plan-call retry, and same shared retry budget for
+            // both failure modes: a transient call failure (proxy backend hiccup) has a real
+            // chance of succeeding on the next attempt; a response that came back but wasn't
+            // valid JSON (a model ignoring withJsonMode and replying in prose) also has a real
+            // chance of self-correcting when told so directly, same as Planner's parse retry. If
+            // every attempt is exhausted, fall back to an ESCALATE decision — same shape as
+            // parseDecision()'s own parse-error fallback, just covering both "never got a
+            // response" and "never got parseable JSON".
+            String lastRaw = null;
             Exception lastError = null;
             for (int attempt = 0; attempt <= MAX_REFLECT_RETRIES; attempt++) {
+                String raw;
                 try {
-                    ChatGeneration callResult = chainActor.invoke(flow, Map.of("prompt", userPrompt));
+                    ChatGeneration callResult = chainActor.invoke(flow,
+                            ChatPromptValue.builder().messages(messages).build());
                     raw = callResult.getText();
                     lastError = null;
-                    break;
                 } catch (Exception e) {
                     lastError = e;
                     log.warn("Round {}: reflect call failed on attempt {}/{}: {}",
                             roundNum, attempt + 1, MAX_REFLECT_RETRIES + 1, e.getMessage());
+                    continue;
+                }
+                lastRaw = raw;
+                decision = tryParseDecision(raw);
+                if (decision != null) break;
+                if (attempt < MAX_REFLECT_RETRIES) {
+                    log.warn("Round {}: reflect parse failed on attempt {}/{}, retrying",
+                            roundNum, attempt + 1, MAX_REFLECT_RETRIES);
+                    messages = new ArrayList<>(messages);
+                    messages.add(BaseMessage.fromMessage(MessageType.AI.getCode(), raw));
+                    messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), PARSE_ERROR_CORRECTION));
                 }
             }
-            if (lastError != null) {
-                decision = new ReflectionDecision();
-                decision.setAction(ReflectionAction.ESCALATE);
-                decision.setReason("Reflect call failed after retries: " + lastError.getMessage());
-            } else {
-                decision = parseDecision(raw);
+            if (decision == null) {
+                if (lastError != null) {
+                    decision = new ReflectionDecision();
+                    decision.setAction(ReflectionAction.ESCALATE);
+                    decision.setReason("Reflect call failed after retries: " + lastError.getMessage());
+                } else {
+                    decision = parseDecision(lastRaw);
+                }
             }
         }
 
@@ -192,10 +217,6 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
 
     private FlowInstance buildFlow(ChainActor chainActor, BaseChatModel llm, Consumer<String> onLlm) {
         return chainActor.builder()
-                .next(ChatPromptTemplate.fromMessages(List.of(
-                        Pair.of("system", SYSTEM_PROMPT),
-                        Pair.of("human", "${prompt}")
-                )))
                 .next(input -> {
                     if (onLlm != null) onLlm.accept(input.toString());
                     return input;
@@ -212,7 +233,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         // What was planned for this round — needed so Reflector can tell "did the plan call for a
         // write/upload that never actually happened" rather than just "did anything happen at all".
         if (round.getPlan() != null && round.getPlan().getNarrative() != null) {
-            sb.append("Plan for this round:\n").append(round.getPlan().getNarrative()).append("\n\n");
+            sb.append("Plan:\n").append(round.getPlan().getNarrative()).append("\n\n");
         }
 
         // Inject factual tool execution count so the LLM cannot hallucinate completion from zero executions.
@@ -284,6 +305,17 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             return List.of();
         }
         return round.getExecutionResult().getToolExecutions();
+    }
+
+    /** Returns null (instead of an ESCALATE fallback) on parse failure, so the retry loop can tell. */
+    private ReflectionDecision tryParseDecision(String text) {
+        try {
+            String json = extractJson(text);
+            ReflectionDecision decision = MAPPER.readValue(json, ReflectionDecision.class);
+            return decision.getAction() != null ? decision : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private ReflectionDecision parseDecision(String text) {
