@@ -16,6 +16,7 @@ package org.salt.regnexe.agent.core.task.store;
 
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -29,4 +30,13 @@ public interface TaskStore {
     Optional<TaskExecutionState> load(String taskId);
 
     void markFinished(String taskId);
+
+    /**
+     * Every task for this session worth continuing via {@code RegnexeAgent.resume()}: anything
+     * except FINISHED. Includes RUNNING (a process killed before it got a chance to save a more
+     * specific status — kill -9, a crash — should still be resumable, not silently lost), PAUSED
+     * (a clean Ctrl+C), and FAILED/ESCALATED/TIMEOUT (all retryable, especially once the caller
+     * can supply a fresh instruction on resume rather than blindly repeating whatever went wrong).
+     */
+    List<TaskExecutionState> listResumable(String sessionId);
 }

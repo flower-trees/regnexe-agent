@@ -14,8 +14,10 @@
 
 package org.salt.regnexe.agent.core.task.store;
 
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,5 +43,12 @@ public class InMemoryTaskStore implements TaskStore {
     @Override
     public void markFinished(String taskId) {
         // State status is already updated by the time this is called; no-op here.
+    }
+
+    @Override
+    public List<TaskExecutionState> listResumable(String sessionId) {
+        return store.values().stream()
+                .filter(s -> sessionId.equals(s.getSessionId()) && s.getStatus() != TaskStatus.FINISHED)
+                .toList();
     }
 }

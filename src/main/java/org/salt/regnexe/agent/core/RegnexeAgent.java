@@ -54,6 +54,7 @@ import org.salt.jlangchain.rag.tools.Tool;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,11 +65,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * RegnexeAgent Runtime — orchestrates the Search→Plan→Execute→Reflect loop.
  * Not a Spring bean; obtain instances via {@link RegnexeAgentBuilder}.
  *
- * <p>Thread-safety note: one execute() call at a time per instance.
- * {@link #pause()} may be called from any thread while execute() is in progress.
+ * <p>Thread-safety note: one execute()/resume() call at a time per instance.
+ * {@link #pause()} may be called from any thread while execute()/resume() is in progress.
  */
 @Slf4j
 public class RegnexeAgent {
+
+    /**
+     * Extra rounds granted on resume when the loaded task was already at its round ceiling
+     * (TIMEOUT, or interrupted on its last allowed round) — otherwise it would immediately re-hit
+     * the same ceiling and have zero chance to make progress with the resume's new instruction.
+     */
+    private static final int RESUME_ROUND_MARGIN = 3;
 
     private final FlowEngine flowEngine;
     private final ChainActor chainActor;
@@ -179,8 +187,50 @@ public class RegnexeAgent {
     }
 
     /**
-     * Signal the currently-running McpAgentExecutor to stop. The task transitions to PAUSED.
-     * Safe to call from any thread.
+     * Resume the most recently updated unfinished task for the given session (see
+     * {@code TaskStore.listResumable}) — whatever it was doing (RUNNING, PAUSED, FAILED,
+     * ESCALATED, or TIMEOUT), continuing with its full round/tool-call history intact via the
+     * same {@code state.priorSteps}/{@code priorStepsSummary} carried across rounds during a
+     * normal run. No resume-specific mode is threaded through Plan/Execute/Reflect — reloading
+     * the persisted state and re-entering the same {@link #runLoop} is sufficient.
+     *
+     * @param supplementInput optional extra instruction, appended onto the task's original goal
+     *                         so every phase's existing "Goal" prompt section picks it up
+     *                         without any dedicated plumbing
+     * @throws IllegalStateException if no resumable task exists for this session
+     */
+    public AgentResult resume(String sessionId, String supplementInput) {
+        List<TaskExecutionState> resumable = taskStore.listResumable(sessionId);
+        if (resumable.isEmpty()) {
+            throw new IllegalStateException("No resumable task found for session: " + sessionId);
+        }
+        TaskExecutionState state = resumable.stream()
+                .max(Comparator.comparingLong(TaskExecutionState::getUpdatedAt))
+                .orElseThrow();
+
+        if (supplementInput != null && !supplementInput.isBlank()) {
+            String goal = state.getRequest().getGoal();
+            state.getRequest().setGoal((goal == null || goal.isBlank() ? "" : goal + "\n\n")
+                    + "[Resumed with additional instruction]: " + supplementInput);
+        }
+        if (state.getCurrentRound() >= state.getMaxRounds()) {
+            state.setMaxRounds(state.getMaxRounds() + RESUME_ROUND_MARGIN);
+        }
+        state.setStatus(TaskStatus.RUNNING);
+
+        eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                EventType.AGENT_STARTED,
+                "Resuming | rounds done: " + state.getCurrentRound()
+                + (supplementInput != null && !supplementInput.isBlank()
+                        ? " | supplement: " + supplementInput : "")));
+
+        List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
+        return runLoop(state, sessionHistory);
+    }
+
+    /**
+     * Signal the currently-running McpAgentExecutor to stop. The task transitions to PAUSED and
+     * can be resumed via {@link #resume}. Safe to call from any thread.
      */
     public void pause() {
         AtomicBoolean signal = this.activeStopSignal;
@@ -329,8 +379,9 @@ public class RegnexeAgent {
         try {
             flowEngine.execute(flowInstance, state.getRequest(), transmitMap);
         } catch (Exception e) {
-            // No resume path exists anymore (see docs/design/09-context-memory-compaction-design.md
-            // history) — every loop failure is a hard FAILED now, not classified by HTTP code.
+            // Every loop failure is a hard FAILED, not classified by HTTP code into a separate
+            // PAUSED bucket — FAILED itself is resumable now (see docs/design/resume-task-design.md
+            // in regnexe-cli), so there's no need for a second "safer to retry" status.
             log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
             state.setStatus(TaskStatus.FAILED);
             taskStore.save(state);
