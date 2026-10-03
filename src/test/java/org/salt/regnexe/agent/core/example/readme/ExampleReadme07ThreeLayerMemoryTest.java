@@ -87,8 +87,7 @@ public class ExampleReadme07ThreeLayerMemoryTest {
         AgentResult result1 = agent.execute(first);
         Assert.assertEquals(TaskStatus.FINISHED, result1.getStatus());
 
-        long longSessionId = (long) sessionId.hashCode();
-        List<HistoryInfos> stored = sessionStorage.loadAll(0L, 0L, longSessionId);
+        List<HistoryInfos> stored = sessionStorage.loadAll("0", "0", sessionId);
         Assert.assertFalse("Session history should be stored after the first execute()", stored.isEmpty());
 
         TaskRequest second = new TaskRequest();

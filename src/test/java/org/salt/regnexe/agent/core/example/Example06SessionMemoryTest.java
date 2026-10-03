@@ -133,9 +133,7 @@ public class Example06SessionMemoryTest {
         Assert.assertEquals(TaskStatus.FINISHED, result1.getStatus());
         Assert.assertNotNull(result1.getFinalText());
 
-        // Verify session storage has an entry (sessionId → Long hashCode)
-        long longSessionId = (long) sessionId.hashCode();
-        List<HistoryInfos> stored = sessionStorage.loadAll(0L, 0L, longSessionId);
+        List<HistoryInfos> stored = sessionStorage.loadAll("0", "0", sessionId);
         Assert.assertFalse("Session history should be stored after execute 1", stored.isEmpty());
 
         System.out.println("Session history entries after execute 1: " + stored.size());
@@ -161,7 +159,7 @@ public class Example06SessionMemoryTest {
         Assert.assertFalse(result2.getFinalText().isBlank());
 
         // Both executions should have contributed to the session
-        List<HistoryInfos> storedAfter2 = sessionStorage.loadAll(0L, 0L, longSessionId);
+        List<HistoryInfos> storedAfter2 = sessionStorage.loadAll("0", "0", sessionId);
         System.out.println("Session history entries after execute 2: " + storedAfter2.size());
         Assert.assertTrue("Session history should grow after execute 2",
                 storedAfter2.size() >= stored.size());

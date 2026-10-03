@@ -401,7 +401,15 @@ public class RegnexeAgent {
                 : rounds.get(rounds.size() - 1).getReflection();
         String finalText = resultComposer.compose(state, lastDecision);
 
-        if (state.getStatus() == TaskStatus.FINISHED || state.getStatus() == TaskStatus.ESCALATED) {
+        // FINISHED/ESCALATED were the only statuses that used to leave a conversation_turns
+        // trace — FAILED and TIMEOUT are just as settled (the loop won't advance this task any
+        // further on its own) and deserve the same visibility in /history, not silence. A task
+        // still RUNNING here (interrupted by a hard kill, not caught by any of this method's own
+        // exception handling) is deliberately excluded — it's not settled, and /resume's
+        // listResumable() already surfaces it with real round-by-round detail; /history isn't
+        // the right place to guess at an unresolved task's content.
+        if (state.getStatus() == TaskStatus.FINISHED || state.getStatus() == TaskStatus.ESCALATED
+                || state.getStatus() == TaskStatus.FAILED || state.getStatus() == TaskStatus.TIMEOUT) {
             String displayGoal = state.getRequest().getDisplayGoal();
             String humanTurn = (displayGoal != null && !displayGoal.isBlank())
                     ? displayGoal : state.getRequest().getGoal();
@@ -487,9 +495,8 @@ public class RegnexeAgent {
         if (sessionMemory != null) {
             history = sessionMemory.readHistory();
         } else if (sessionStorage != null) {
-            long longId = (long) sessionId.hashCode();
             history = PeriodicConversationSummaryMemoryReader.builder()
-                    .appId(0L).userId(0L).sessionId(longId).storage(sessionStorage).build()
+                    .appId("0").userId("0").sessionId(sessionId).storage(sessionStorage).build()
                     .readHistory();
         } else {
             return null;
@@ -510,13 +517,12 @@ public class RegnexeAgent {
                 log.debug("Session storer skipped: no defaultModel configured for summary LLM");
                 return;
             }
-            long longId = (long) sessionId.hashCode();
             // Periodic (batch) compaction by default: compresses a whole batch of rounds at
             // once when the buffer fills, instead of one round every time it overflows — far
             // fewer summarization LLM calls on long sessions than the old rolling strategy
             // (ConversationSummaryBufferMemory, still available via explicit withSessionMemory).
             memory = PeriodicConversationSummaryMemory.builder()
-                    .appId(0L).userId(0L).sessionId(longId)
+                    .appId("0").userId("0").sessionId(sessionId)
                     .maxSize(sessionCompactPeriod)
                     .storage(sessionStorage)
                     .llm(llmProvider.provide(defaultModel))
