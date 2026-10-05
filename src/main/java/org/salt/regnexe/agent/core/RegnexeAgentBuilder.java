@@ -17,6 +17,7 @@ package org.salt.regnexe.agent.core;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
+import org.salt.regnexe.agent.core.event.CompositeEventListener;
 import org.salt.regnexe.agent.core.event.TokenAggregatingEventListener;
 import org.salt.regnexe.agent.core.llm.DefaultModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
@@ -217,7 +218,7 @@ public class RegnexeAgentBuilder {
         private TaskStore taskStore;
         private ResultComposer resultComposer;
         private int maxRounds = DEFAULT_MAX_ROUNDS;
-        private AgentEventListener eventListener;
+        private final List<AgentEventListener> eventListeners = new ArrayList<>();
         private ConversationStorage sessionStorage;
         private int sessionBufferSize = 10;
         private int sessionCompactPeriod = 20;
@@ -329,9 +330,21 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /**
+         * Registers an event listener. May be called more than once: every listener receives
+         * every event, in registration order.
+         */
         public Builder withEventListener(AgentEventListener listener) {
-            this.eventListener = listener;
+            if (listener != null) this.eventListeners.add(listener);
             return this;
+        }
+
+        private AgentEventListener resolveEventListener() {
+            if (eventListeners.isEmpty()) return AgentEventListener.NO_OP;
+            // A single listener is passed through unwrapped, so its exceptions keep propagating
+            // exactly as before multiple listeners were supported.
+            if (eventListeners.size() == 1) return eventListeners.get(0);
+            return new CompositeEventListener(eventListeners);
         }
 
         public Builder withSessionStorage(ConversationStorage storage) {
@@ -625,7 +638,7 @@ public class RegnexeAgentBuilder {
                     taskStore != null ? taskStore : new InMemoryTaskStore(),
                     resultComposer != null ? resultComposer : new DefaultResultComposer(),
                     maxRounds,
-                    new TokenAggregatingEventListener(eventListener != null ? eventListener : AgentEventListener.NO_OP),
+                    new TokenAggregatingEventListener(resolveEventListener()),
                     sessionStorage != null ? sessionStorage : new InMemoryConversationStorage(),
                     sessionBufferSize,
                     sessionCompactPeriod,
