@@ -54,6 +54,12 @@ public class TokenAggregatingEventListener implements AgentEventListener {
     @Override
     public void onEvent(AgentEvent event) {
         switch (event.getType()) {
+            case AGENT_STARTED -> {
+                // Elapsed time is measured from here, not from the first token event: that one
+                // arrives only after the first LLM call has already finished.
+                taskStartMs.put(event.getTaskId() != null ? event.getTaskId() : "", event.getTimestamp());
+                delegate.dispatch(event);
+            }
             case TOKEN_USAGE, CAPABILITY_TOKEN_USAGE -> {
                 accumulate(event);
                 delegate.dispatch(event);

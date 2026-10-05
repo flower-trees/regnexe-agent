@@ -61,6 +61,9 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             and any prior execution history, then produce a concise execution plan.
 
             Rules:
+            - ID FIDELITY: every id in selectedCapabilityIds MUST be copied character-for-character \
+              from the "Available capabilities" list below. Never invent, guess, abbreviate, or use a \
+              bare number/index as an id — if you are not certain an id is listed there, do not include it.
             - Select only capabilities that are genuinely relevant to the goal.
             - The narrative should be clear, actionable instructions for the executor.
             - NARRATIVE LENGTH: keep narrative short — a few sentences covering sequence/strategy only \
@@ -201,8 +204,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 // through to recoverPlan()'s deterministic, LLM-free fallback.
                 String gen;
                 try {
+                    long callStartedAt = System.currentTimeMillis();
                     ChatGeneration callResult = chainActor.invoke(flow,
                             ChatPromptValue.builder().messages(messages).build());
+                    LlmCallReporter.report(listener, taskId, round, "plan", callResult, callStartedAt);
                     gen = callResult.getText();
                 } catch (Exception e) {
                     log.warn("Round {}: plan call failed on attempt {}/{}: {}",
@@ -210,14 +215,34 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                     continue;
                 }
                 lastRaw = gen;
-                plan = tryParsePlan(lastRaw);
-                if (plan != null) break;
+                PlanOutput parsed = tryParsePlan(lastRaw);
+                List<String> invalidIds = invalidCapabilityIds(parsed, candidates);
+                if (parsed != null && invalidIds.isEmpty()) {
+                    plan = parsed;
+                    break;
+                }
                 if (attempt < MAX_PLAN_RETRIES) {
-                    log.warn("Round {}: plan parse failed on attempt {}/{}, retrying",
-                            round, attempt + 1, MAX_PLAN_RETRIES);
                     messages = new ArrayList<>(messages);
                     messages.add(BaseMessage.fromMessage(MessageType.AI.getCode(), lastRaw));
-                    messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), PARSE_ERROR_CORRECTION));
+                    if (parsed == null) {
+                        log.warn("Round {}: plan parse failed on attempt {}/{}, retrying",
+                                round, attempt + 1, MAX_PLAN_RETRIES);
+                        messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), PARSE_ERROR_CORRECTION));
+                    } else {
+                        log.warn("Round {}: plan selected unknown capability id(s) {} on attempt {}/{}, retrying",
+                                round, invalidIds, attempt + 1, MAX_PLAN_RETRIES);
+                        messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), invalidIdCorrection(invalidIds)));
+                    }
+                } else if (parsed != null) {
+                    // Out of retries but the JSON itself is fine — keep the plan and drop just the
+                    // ids that still don't exist, rather than discarding an otherwise-usable plan
+                    // via recoverPlan() (which would also throw away a correct narrative/valid ids).
+                    log.warn("Round {}: plan still selects unknown capability id(s) {} after {} retries, dropping them",
+                            round, invalidIds, MAX_PLAN_RETRIES);
+                    List<String> cleaned = new ArrayList<>(parsed.getSelectedCapabilityIds());
+                    cleaned.removeAll(invalidIds);
+                    parsed.setSelectedCapabilityIds(cleaned);
+                    plan = parsed;
                 }
             }
             if (plan == null) {
@@ -390,6 +415,32 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         messages.add(BaseMessage.fromMessage(MessageType.HUMAN.getCode(), humanSb.toString()));
 
         return ChatPromptValue.builder().messages(messages).build();
+    }
+
+    /**
+     * Ids the LLM selected that don't exist among this round's real candidates — a hallucination
+     * the Planner has no other way to catch, since {@code selectedCapabilityIds} is otherwise
+     * trusted verbatim until {@code CapabilityExecutor} tries (and fails) to resolve them, by
+     * which point the round has already been wasted. Returns empty for a null plan or candidates.
+     */
+    private List<String> invalidCapabilityIds(PlanOutput parsed, List<CapabilityCandidate> candidates) {
+        if (parsed == null || parsed.getSelectedCapabilityIds() == null || candidates == null) {
+            return List.of();
+        }
+        Set<String> validIds = candidates.stream()
+                .map(CapabilityCandidate::getCapabilityId)
+                .collect(java.util.stream.Collectors.toSet());
+        return parsed.getSelectedCapabilityIds().stream()
+                .filter(id -> !validIds.contains(id))
+                .toList();
+    }
+
+    private String invalidIdCorrection(List<String> invalidIds) {
+        return "[INVALID ID ERROR] Your previous response selected id(s) that do not exist: "
+                + String.join(", ", invalidIds) + ". "
+                + "Every id in selectedCapabilityIds must be copied character-for-character from the "
+                + "\"Available capabilities\" list above — do not invent, guess, or abbreviate an id. "
+                + "Output a corrected JSON object.";
     }
 
     private PlanOutput tryParsePlan(String text) {

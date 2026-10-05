@@ -163,8 +163,10 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             for (int attempt = 0; attempt <= MAX_REFLECT_RETRIES; attempt++) {
                 String raw;
                 try {
+                    long callStartedAt = System.currentTimeMillis();
                     ChatGeneration callResult = chainActor.invoke(flow,
                             ChatPromptValue.builder().messages(messages).build());
+                    LlmCallReporter.report(listener, taskId, roundNum, "reflect", callResult, callStartedAt);
                     raw = callResult.getText();
                     lastError = null;
                 } catch (Exception e) {

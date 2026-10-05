@@ -68,7 +68,7 @@ public abstract class AbstractEventListener implements AgentEventListener {
     protected static boolean isLlmEvent(EventType type) {
         return switch (type) {
             case LLM_RESPONDED, PLAN_LLM_RESPONDED, SKILL_LLM_RESPONDED,
-                 AGENT_LLM_RESPONDED, REFLECT_LLM_RESPONDED -> true;
+                 AGENT_LLM_RESPONDED, REFLECT_LLM_RESPONDED, LLM_OUTPUT -> true;
             default -> false;
         };
     }
@@ -87,6 +87,7 @@ public abstract class AbstractEventListener implements AgentEventListener {
             case AGENT_LLM_RESPONDED  -> "[TOOL SubAgent LLM]";
             case TOOL_RESULT          -> "[TOOL Result   ]";
             case LLM_RESPONDED        -> "[Execute LLM   ]";
+            case LLM_OUTPUT           -> "[LLM Output    ]";
             case EXECUTION_COMPLETED  -> "[Execute Result]";
             case REFLECTION_STARTED   -> "[Reflect Input ]";
             case REFLECT_LLM_RESPONDED-> "[Reflect LLM   ]";
