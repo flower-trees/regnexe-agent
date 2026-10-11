@@ -21,6 +21,7 @@ import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.SpanIds;
 import org.salt.regnexe.agent.core.marketplace.Marketplace;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
@@ -52,6 +53,8 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
 
         int roundNumber = state.getCurrentRound() + 1;
+        String phaseSpan = SpanIds.next();
+        String runSpan = bus.getTransmit(ContextBusKeys.RUN_SPAN_ID);
         state.setCurrentRound(roundNumber);
 
         RoundRecord round = new RoundRecord();
@@ -78,7 +81,7 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
             listener.dispatch(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_STARTED,
                     "Goal: " + state.getRequest().getGoal()
                     + (lastHint != null && lastHint.getSearchDirection() != null
-                       ? " | hint: " + lastHint.getSearchDirection() : "")));
+                       ? " | hint: " + lastHint.getSearchDirection() : "")).inSpan(phaseSpan, runSpan));
 
             CapabilitySearchResult result = marketplace.search(query);
 
@@ -93,7 +96,7 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
             String names = result.getCandidates().stream()
                     .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
             listener.dispatch(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
-                    "Found " + result.getCandidates().size() + " capabilities: " + names));
+                    "Found " + result.getCandidates().size() + " capabilities: " + names).inSpan(phaseSpan, runSpan));
             log.debug("Round {}: searched, found {} candidates",
                     roundNumber, result.getCandidates().size());
         } else {
@@ -106,7 +109,7 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
             bus.putTransmit(ContextBusKeys.CANDIDATES, lastCandidates);
 
             listener.dispatch(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
-                    "Reusing cached capabilities (version " + lastVersion + ")"));
+                    "Reusing cached capabilities (version " + lastVersion + ")").inSpan(phaseSpan, runSpan));
             log.debug("Round {}: skipped search, reusing version {}", roundNumber, lastVersion);
         }
 

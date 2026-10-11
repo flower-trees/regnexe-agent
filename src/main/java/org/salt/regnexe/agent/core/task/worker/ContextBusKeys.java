@@ -52,6 +52,8 @@ public final class ContextBusKeys {
     /** Optional per-role model override for {@code Reflector} — see {@link #PLANNER_MODEL} javadoc. */
     public static final String REFLECTOR_MODEL = "reflectorModel";
     public static final String EVENT_LISTENER = "eventListener";
+    /** Span id of the current execute()/resume() run — parent of every phase span. */
+    public static final String RUN_SPAN_ID = "runSpanId";
     public static final String STOP_SIGNAL    = "stopSignal";
     public static final String TASK_STORE     = "taskStore";
     public static final String SESSION_SUMMARY      = "sessionSummary";

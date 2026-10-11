@@ -25,6 +25,8 @@ import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
+import org.salt.regnexe.agent.core.event.SpanIds;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.common.util.RoundRecords;
@@ -134,11 +136,15 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         BaseChatModel llm = llmProvider.provide(modelSpec).withJsonMode();
         String taskId = state.getTaskId();
         int roundNum = state.getCurrentRound();
+        String phaseSpan = SpanIds.next();
+        LoopSpans spans = new LoopSpans(() -> phaseSpan);
         FlowInstance flow = buildFlow(chainActor, llm,
-                text -> listener.dispatch(AgentEvent.of(taskId, roundNum, EventType.REFLECT_LLM_RESPONDED, text)));
+                text -> listener.dispatch(spans.llmStarted(
+                        AgentEvent.of(taskId, roundNum, EventType.REFLECT_LLM_RESPONDED, text))));
 
         listener.dispatch(AgentEvent.of(taskId, roundNum, EventType.REFLECTION_STARTED,
-                execText != null ? execText : "(no execution output)"));
+                execText != null ? execText : "(no execution output)")
+                .inSpan(phaseSpan, bus.getTransmit(ContextBusKeys.RUN_SPAN_ID)));
 
         // Pre-LLM guard: catch structurally incomplete rounds before the LLM can hallucinate completion.
         RoundRecord roundRecord = RoundRecords.current(state);
@@ -166,7 +172,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
                     long callStartedAt = System.currentTimeMillis();
                     ChatGeneration callResult = chainActor.invoke(flow,
                             ChatPromptValue.builder().messages(messages).build());
-                    LlmCallReporter.report(listener, taskId, roundNum, "reflect", callResult, callStartedAt);
+                    LlmCallReporter.report(listener, spans, taskId, roundNum, "reflect", callResult, callStartedAt);
                     raw = callResult.getText();
                     lastError = null;
                 } catch (Exception e) {
@@ -209,7 +215,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
 
         listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.REFLECTION_COMPLETED,
-                decision.getAction() + " — " + decision.getReason()));
+                decision.getAction() + " — " + decision.getReason()).inSpan(phaseSpan, null));
         log.debug("Round {}: reflection = {}, reason = {}",
                 state.getCurrentRound(), decision.getAction(), decision.getReason());
 

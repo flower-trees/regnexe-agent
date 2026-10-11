@@ -65,7 +65,7 @@ public class TokenAggregatingEventListener implements AgentEventListener {
                 delegate.dispatch(event);
             }
             case AGENT_COMPLETED -> {
-                emitSummary(event.getTaskId(), event.getRound(), event.getTimestamp());
+                emitSummary(event);
                 delegate.dispatch(event);
             }
             default -> delegate.dispatch(event);
@@ -110,7 +110,10 @@ public class TokenAggregatingEventListener implements AgentEventListener {
         taskStartMs.computeIfAbsent(parentTaskId, k -> event.getTimestamp());
     }
 
-    private void emitSummary(String taskId, int round, long completedAt) {
+    private void emitSummary(AgentEvent completed) {
+        String taskId = completed.getTaskId();
+        int round = completed.getRound();
+        long completedAt = completed.getTimestamp();
         String key = taskId != null ? taskId : "";
         Map<String, AiTokenUsage> modelMap = accumulator.remove(key);
         toolCallsTracker.remove(key);
@@ -129,6 +132,7 @@ public class TokenAggregatingEventListener implements AgentEventListener {
 
         delegate.dispatch(AgentEvent.ofTaskTokenSummary(
                 taskId, round, total, modelMap, elapsedMs, totalLlmMs,
-                durations != null ? durations : Map.of()));
+                durations != null ? durations : Map.of())
+                .inSpan(completed.getSpanId(), null));
     }
 }

@@ -25,6 +25,8 @@ import org.salt.regnexe.agent.core.common.util.RoundRecords;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
+import org.salt.regnexe.agent.core.event.SpanIds;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
@@ -164,8 +166,11 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
         String candidateNames = candidates == null ? "" : candidates.stream()
                 .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
+        String phaseSpan = SpanIds.next();
+        LoopSpans spans = new LoopSpans(() -> phaseSpan);
         listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
-                "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
+                "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames)
+                .inSpan(phaseSpan, bus.getTransmit(ContextBusKeys.RUN_SPAN_ID)));
 
         boolean hasCandidates = candidates != null && !candidates.isEmpty();
         // Session history is normally only sent on round 1 — from round 2 on, this round's own
@@ -192,7 +197,8 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             // affect Execute — CapabilityExecutor provides its own llm instance for tool-calling.
             BaseChatModel llm = llmProvider.provide(modelSpec).withJsonMode();
             FlowInstance flow = buildFlow(chainActor, llm,
-                    text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
+                    text -> listener.dispatch(spans.llmStarted(
+                            AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text))));
 
             ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, projectMemory, defaultIterations);
             List<BaseMessage> messages = new ArrayList<>(basePrompt.getMessages());
@@ -207,7 +213,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                     long callStartedAt = System.currentTimeMillis();
                     ChatGeneration callResult = chainActor.invoke(flow,
                             ChatPromptValue.builder().messages(messages).build());
-                    LlmCallReporter.report(listener, taskId, round, "plan", callResult, callStartedAt);
+                    LlmCallReporter.report(listener, spans, taskId, round, "plan", callResult, callStartedAt);
                     gen = callResult.getText();
                 } catch (Exception e) {
                     log.warn("Round {}: plan call failed on attempt {}/{}: {}",
@@ -291,7 +297,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
 
         listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
                 "Selected: " + plan.getSelectedCapabilityIds()
-                + " | " + plan.getNarrative()));
+                + " | " + plan.getNarrative()).inSpan(phaseSpan, null));
         log.debug("Round {}: plan produced, selected caps: {}",
                 state.getCurrentRound(), plan.getSelectedCapabilityIds());
 

@@ -21,6 +21,7 @@ import org.salt.jlangchain.core.parser.generation.ChatGeneration;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
 
 /**
  * Reports a finished Plan / Reflect LLM call: its raw output, then its token usage. The execute
@@ -37,11 +38,11 @@ final class LlmCallReporter {
      * @param phase distinguishes this phase's usage from the execute loop's inside
      *              TokenAggregatingEventListener, which tracks cumulative tool calls per sub-task id
      */
-    static void report(AgentEventListener listener, String taskId, int round, String phase,
+    static void report(AgentEventListener listener, LoopSpans spans, String taskId, int round, String phase,
                        ChatGeneration result, long startedAt) {
         if (listener == null || result == null) return;
         try {
-            dispatch(listener, taskId, round, phase, result, startedAt);
+            dispatch(listener, spans, taskId, round, phase, result, startedAt);
         } catch (RuntimeException e) {
             // Callers invoke this inside their LLM-call try block: a listener failure must not be
             // mistaken for a failed model call and trigger a paid retry.
@@ -49,18 +50,18 @@ final class LlmCallReporter {
         }
     }
 
-    private static void dispatch(AgentEventListener listener, String taskId, int round, String phase,
-                                 ChatGeneration result, long startedAt) {
-        listener.dispatch(AgentEvent.of(taskId, round, EventType.LLM_OUTPUT, result.getText()));
+    private static void dispatch(AgentEventListener listener, LoopSpans spans, String taskId, int round,
+                                 String phase, ChatGeneration result, long startedAt) {
+        listener.dispatch(spans.llmFollowUp(AgentEvent.of(taskId, round, EventType.LLM_OUTPUT, result.getText())));
 
         Object raw = result.getResponseMetadata() != null
                 ? result.getResponseMetadata().get(AiTokenUsage.METADATA_KEY) : null;
         AiTokenUsage usage = raw instanceof AiTokenUsage u ? u.copy() : AiTokenUsage.empty();
         usage.incrementLlmCalls();
-        listener.dispatch(AgentEvent.ofTokenUsage(taskId, round, AgentTokenUsageEvent.builder()
+        listener.dispatch(spans.llmFollowUp(AgentEvent.ofTokenUsage(taskId, round, AgentTokenUsageEvent.builder()
                 .taskId(taskId + ":" + phase)
                 .deltaUsage(usage)
                 .deltaDurationMs(Math.max(0, System.currentTimeMillis() - startedAt))
-                .build()));
+                .build())));
     }
 }

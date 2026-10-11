@@ -25,6 +25,8 @@ import org.salt.regnexe.agent.core.common.util.RoundRecords;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
+import org.salt.regnexe.agent.core.event.SpanIds;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.marketplace.Marketplace;
@@ -121,13 +123,15 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         // no type prefix.
         Map<String, CapabilityType> typeByName = new HashMap<>();
         java.nio.file.Path claudeCompatWorkspace = bus.getTransmit(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE);
+        String phaseSpan = SpanIds.next();
+        LoopSpans spans = new LoopSpans(() -> phaseSpan);
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skillSystemPrompts,
-                subAgents, maxAgentIterations, maxConsecutiveToolFailures, listener, taskId, round, verbose,
+                subAgents, maxAgentIterations, maxConsecutiveToolFailures, listener, spans, taskId, round, verbose,
                 toolExecutions, typeByName, claudeCompatWorkspace, baseToolNames);
 
         // Always available, independent of the plan's selected capabilities — a self-maintained
         // checklist the executor can optionally use for a multi-step round, the same way Claude
-        // Code's TodoWrite is just an ordinary tool rather than a forced planning phase (see docs/design
+        // Code's TodoWrite is just an ordinary tool rather than a forced phase (see docs/design
         // discussion on deepagents' planning-less loop). Built fresh per round so its closure can
         // write straight into this round's live `state` instead of needing a second lookup path.
         mcpTools.add(buildWriteTodosTool(state, taskStore, listener, taskId, round));
@@ -150,20 +154,21 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 .tools(mcpTools)
                 .subAgents(subAgents)
                 .context(agentContext)
-                .onLlm(text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text)))
+                .onLlm(text -> listener.dispatch(spans.llmStarted(
+                        AgentEvent.of(taskId, round, EventType.LLM_RESPONDED, text))))
                 .onToolCall(tc -> {
                     outerToolCall.set(tc);
-                    listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
-                            labelToolCall(sharedLoopScope, tc, typeByName)));
+                    listener.dispatch(spans.toolCalled(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
+                            labelToolCall(sharedLoopScope, tc, typeByName))));
                 })
                 .onObservation(obs -> {
                     state.setLastToolResult(obs);
                     String label = formatToolCallLabel(sharedLoopScope, outerToolCall.get(), typeByName);
                     recordToolExecution(toolExecutions, round, label, outerToolCall.get(), obs);
-                    listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                            formatToolResult(label, obs)));
+                    listener.dispatch(spans.toolResult(AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
+                            formatToolResult(label, obs))));
                 })
-                .onTokenUsage(u -> listener.dispatch(AgentEvent.ofTokenUsage(taskId, round, u)));
+                .onTokenUsage(u -> listener.dispatch(spans.llmFollowUp(AgentEvent.ofTokenUsage(taskId, round, u))));
         if (maxAgentIterations != null) {
             executorBuilder.maxIterations(maxAgentIterations);
         }
@@ -177,7 +182,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         String agentInput = buildAgentInput(state, narrative, inputDescs, plan, projectMemory, skillSystemPrompts);
 
         listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_STARTED,
-                "Selected: " + selectedCapIds + " | " + agentInput));
+                "Selected: " + selectedCapIds + " | " + agentInput)
+                .inSpan(phaseSpan, bus.getTransmit(ContextBusKeys.RUN_SPAN_ID)));
 
         // Shared cross-round context: replay whatever steps/summary survived prior rounds into a
         // fresh AgentTaskContext, then hand it to invoke() as the preloaded context instead of
@@ -228,14 +234,14 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             output.setFinalText(executionText);
             output.setStatus(ExecutionStatus.SUCCESS);
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
-                    "SUCCESS | " + executionText));
+                    "SUCCESS | " + executionText).inSpan(phaseSpan, null));
             log.debug("Round {}: execution succeeded", state.getCurrentRound());
         } catch (AgentStoppedException e) {
             output.setFinalText(state.getLastToolResult() != null
                     ? state.getLastToolResult() : "Paused before any tool result was produced.");
             output.setStatus(ExecutionStatus.STOPPED);
             state.setStatus(TaskStatus.PAUSED);
-            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED"));
+            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED").inSpan(phaseSpan, null));
             log.debug("Round {}: execution paused", state.getCurrentRound());
         } catch (AgentAbortException e) {
             output.setStatus(ExecutionStatus.FAILED);
@@ -246,13 +252,13 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             output.setFinalText("Round " + round + " incomplete: iteration budget ("
                     + (maxAgentIterations != null ? maxAgentIterations : "?") + " steps) exceeded.");
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
-                    "FAILED | " + e.getMessage()));
+                    "FAILED | " + e.getMessage()).inSpan(phaseSpan, null));
             log.warn("Round {}: execution aborted: {}", state.getCurrentRound(), e.getMessage());
         } catch (Exception e) {
             output.setStatus(ExecutionStatus.FAILED);
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName() + " (no message)";
             output.setFinalText(msg);
-            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "FAILED | " + msg));
+            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "FAILED | " + msg).inSpan(phaseSpan, null));
             log.warn("Round {}: execution failed: {}", state.getCurrentRound(), msg);
         } finally {
             this.mcpAgentExecutor = null;
@@ -334,7 +340,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                      ChainActor chainActor, BaseChatModel llm, ModelProvider llmProvider,
                                      List<Tool> mcpTools, List<String> skillSystemPrompts, List<SubAgent> subAgents,
                                      Integer maxIterations, Integer maxConsecutiveToolFailures,
-                                     AgentEventListener listener, String taskId, int round, boolean verbose,
+                                     AgentEventListener listener, LoopSpans outerSpans,
+                                     String taskId, int round, boolean verbose,
                                      List<ToolExecutionRecord> toolExecutions,
                                      Map<String, CapabilityType> typeByName,
                                      java.nio.file.Path claudeCompatWorkspace,
@@ -415,27 +422,29 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                         if (cfg.getOwnTools() != null && !cfg.getOwnTools().isEmpty()) {
                             ab.tools(cfg.getOwnTools());
                         }
+                        // This sub-agent runs inside whichever outer tool call invoked it.
+                        LoopSpans subSpans = outerSpans.nested();
                         if (verbose) {
                             ab.verbose(true);
                         } else {
                             String name = cap.getName();
                             String scope = "[" + typeLabel(CapabilityType.SUB_AGENT) + ":" + name + "]";
                             AtomicReference<String> subAgentToolCall = new AtomicReference<>();
-                            ab.onLlm(text -> listener.dispatch(
+                            ab.onLlm(text -> listener.dispatch(subSpans.llmStarted(
                                 AgentEvent.of(taskId, round, EventType.AGENT_LLM_RESPONDED,
-                                              scope + " " + text)));
+                                              scope + " " + text))));
                             ab.onToolCall(tc -> {
                                 subAgentToolCall.set(tc);
-                                listener.dispatch(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
-                                        labelToolCall(scope, tc, typeByName)));
+                                listener.dispatch(subSpans.toolCalled(AgentEvent.of(taskId, round, EventType.TOOL_CALLED,
+                                        labelToolCall(scope, tc, typeByName))));
                             });
-                            ab.onObservation(obs -> listener.dispatch(
+                            ab.onObservation(obs -> listener.dispatch(subSpans.toolResult(
                                 AgentEvent.of(taskId, round, EventType.TOOL_RESULT,
-                                              formatObservedToolResult(toolExecutions, round, scope, subAgentToolCall.get(), obs, typeByName))));
+                                              formatObservedToolResult(toolExecutions, round, scope, subAgentToolCall.get(), obs, typeByName)))));
                         }
                         String agentCapName = cap.getName();
-                        ab.onTokenUsage(u -> listener.dispatch(
-                            AgentEvent.ofCapabilityTokenUsage(taskId, round, agentCapName, u)));
+                        ab.onTokenUsage(u -> listener.dispatch(subSpans.llmFollowUp(
+                            AgentEvent.ofCapabilityTokenUsage(taskId, round, agentCapName, u))));
                         if (maxIterations != null) ab.maxIterations(maxIterations);
                         if (maxConsecutiveToolFailures != null) ab.maxConsecutiveToolFailures(maxConsecutiveToolFailures);
                         subAgents.add(ab.build());

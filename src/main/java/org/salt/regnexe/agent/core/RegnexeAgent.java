@@ -22,6 +22,8 @@ import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
+import org.salt.regnexe.agent.core.event.SpanIds;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.marketplace.Marketplace;
@@ -179,11 +181,12 @@ public class RegnexeAgent {
         TaskExecutionState state = initState(request);
         taskStore.save(state);
 
+        String runSpan = SpanIds.rootSpanId(state.getTaskId());
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), 0, EventType.AGENT_STARTED,
-                "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds));
+                "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds).inSpan(runSpan, null));
 
         List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
-        return runLoop(state, sessionHistory);
+        return runLoop(state, sessionHistory, runSpan);
     }
 
     /**
@@ -218,14 +221,17 @@ public class RegnexeAgent {
         }
         state.setStatus(TaskStatus.RUNNING);
 
+        // A resumed run is a child of the task's original root span, so it lands in the same trace.
+        String runSpan = SpanIds.next();
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_STARTED,
                 "Resuming | rounds done: " + state.getCurrentRound()
                 + (supplementInput != null && !supplementInput.isBlank()
-                        ? " | supplement: " + supplementInput : "")));
+                        ? " | supplement: " + supplementInput : ""))
+                .inSpan(runSpan, SpanIds.rootSpanId(state.getTaskId())));
 
         List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
-        return runLoop(state, sessionHistory);
+        return runLoop(state, sessionHistory, runSpan);
     }
 
     /**
@@ -274,8 +280,10 @@ public class RegnexeAgent {
         String taskId = UUID.randomUUID().toString();
         BaseChatModel llm = llmProvider.provide(defaultModel);
 
+        String runSpan = SpanIds.rootSpanId(taskId);
+        LoopSpans spans = new LoopSpans(() -> runSpan);
         eventListener.dispatch(AgentEvent.of(taskId, 0, EventType.AGENT_STARTED,
-                "Skill: " + capabilityId + " | args: " + args));
+                "Skill: " + capabilityId + " | args: " + args).inSpan(runSpan, null));
 
         Skill.Builder skillBuilder = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
         // executeSkill() otherwise falls back to j-langchain Skill.Builder's own
@@ -319,15 +327,15 @@ public class RegnexeAgent {
             skillBuilder.verbose(true);
         } else {
             String scope = "[skill:" + cap.getName() + "]";
-            skillBuilder.onLlm(text -> eventListener.dispatch(
-                    AgentEvent.of(taskId, 0, EventType.SKILL_LLM_RESPONDED, scope + " " + text)));
-            skillBuilder.onToolCall(tc -> eventListener.dispatch(
-                    AgentEvent.of(taskId, 0, EventType.TOOL_CALLED, scope + " " + tc)));
-            skillBuilder.onObservation(obs -> eventListener.dispatch(
-                    AgentEvent.of(taskId, 0, EventType.TOOL_RESULT, scope + " " + obs)));
+            skillBuilder.onLlm(text -> eventListener.dispatch(spans.llmStarted(
+                    AgentEvent.of(taskId, 0, EventType.SKILL_LLM_RESPONDED, scope + " " + text))));
+            skillBuilder.onToolCall(tc -> eventListener.dispatch(spans.toolCalled(
+                    AgentEvent.of(taskId, 0, EventType.TOOL_CALLED, scope + " " + tc))));
+            skillBuilder.onObservation(obs -> eventListener.dispatch(spans.toolResult(
+                    AgentEvent.of(taskId, 0, EventType.TOOL_RESULT, scope + " " + obs))));
         }
-        skillBuilder.onTokenUsage(u -> eventListener.dispatch(
-                AgentEvent.ofCapabilityTokenUsage(taskId, 0, cap.getName(), u)));
+        skillBuilder.onTokenUsage(u -> eventListener.dispatch(spans.llmFollowUp(
+                AgentEvent.ofCapabilityTokenUsage(taskId, 0, cap.getName(), u))));
 
         String finalText;
         TaskStatus status;
@@ -351,7 +359,7 @@ public class RegnexeAgent {
         }
 
         eventListener.dispatch(AgentEvent.of(taskId, 0, EventType.AGENT_COMPLETED,
-                "Status: " + status + " | Skill: " + capabilityId));
+                "Status: " + status + " | Skill: " + capabilityId).inSpan(runSpan, null));
 
         return AgentResult.builder()
                 .taskId(taskId)
@@ -362,11 +370,12 @@ public class RegnexeAgent {
 
     // ── Loop ─────────────────────────────────────────────────────────────────
 
-    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory) {
+    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory, String runSpan) {
         AtomicBoolean stopSignal = new AtomicBoolean(false);
         this.activeStopSignal = stopSignal;
 
         Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory);
+        transmitMap.put(ContextBusKeys.RUN_SPAN_ID, runSpan);
 
         FlowInstance flowInstance = flowEngine.builder()
                 .loop(
@@ -385,6 +394,11 @@ public class RegnexeAgent {
             log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
             state.setStatus(TaskStatus.FAILED);
             taskStore.save(state);
+            // Listeners need the task's end even when it dies here: without it the run's span
+            // never closes and no token summary is emitted for what was already spent.
+            eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                    EventType.AGENT_COMPLETED,
+                    "Status: " + state.getStatus() + " | " + e.getMessage()).inSpan(runSpan, null));
             throw e;
         }
 
@@ -418,7 +432,7 @@ public class RegnexeAgent {
 
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_COMPLETED,
-                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()));
+                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()).inSpan(runSpan, null));
 
         return AgentResult.builder()
                 .taskId(state.getTaskId())
