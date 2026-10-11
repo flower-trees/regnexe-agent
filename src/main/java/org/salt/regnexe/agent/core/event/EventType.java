@@ -34,6 +34,10 @@ public enum EventType {
     TOOL_RESULT,
     TOKEN_USAGE,
 
+    // The executor's self-maintained checklist changed (write_todos tool). Text is the todo
+    // list as JSON — see CapabilityExecutor.buildWriteTodosTool().
+    TODOS_UPDATED,
+
     // Phase-specific LLM hooks for trace clarity
     PLAN_LLM_RESPONDED,
     REFLECT_LLM_RESPONDED,

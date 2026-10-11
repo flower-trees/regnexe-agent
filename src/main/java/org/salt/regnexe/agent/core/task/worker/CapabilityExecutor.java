@@ -20,6 +20,7 @@ import org.salt.function.flow.node.FlowNode;
 import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.enums.TodoStatus;
 import org.salt.regnexe.agent.core.common.util.RoundRecords;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
@@ -29,6 +30,7 @@ import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.marketplace.Marketplace;
 import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
+import org.salt.regnexe.agent.core.task.state.TodoItem;
 import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
 import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
@@ -50,6 +52,7 @@ import org.salt.jlangchain.core.skill.SkillConfig;
 import org.salt.jlangchain.core.subagent.SubAgent;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
+import org.salt.jlangchain.utils.JsonUtil;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -121,6 +124,13 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skillSystemPrompts,
                 subAgents, maxAgentIterations, maxConsecutiveToolFailures, listener, taskId, round, verbose,
                 toolExecutions, typeByName, claudeCompatWorkspace, baseToolNames);
+
+        // Always available, independent of the plan's selected capabilities — a self-maintained
+        // checklist the executor can optionally use for a multi-step round, the same way Claude
+        // Code's TodoWrite is just an ordinary tool rather than a forced planning phase (see docs/design
+        // discussion on deepagents' planning-less loop). Built fresh per round so its closure can
+        // write straight into this round's live `state` instead of needing a second lookup path.
+        mcpTools.add(buildWriteTodosTool(state, taskStore, listener, taskId, round));
 
         // Best-effort attribution for the tool-call log: a Skill shares this one loop/tool list
         // with everything else picked this round, so there's no real signal for which skill's
@@ -599,6 +609,77 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             return observation;
         }
         return toolCallLabel + " -> " + observation;
+    }
+
+    /**
+     * Builds this round's {@code write_todos} tool — a self-maintained checklist the executor can
+     * optionally use for multi-step work, the same way Claude Code's TodoWrite is an ordinary
+     * tool rather than a forced planning phase. Every call replaces the whole list (no partial
+     * update), mirroring TodoWrite's own semantics. Closes over the live {@code state} so it can
+     * write straight into {@link TaskExecutionState#getTodos()} and persist it immediately,
+     * instead of going through the ContextBus (which {@code Tool.func} has no access to).
+     */
+    private Tool buildWriteTodosTool(TaskExecutionState state, TaskStore taskStore,
+                                     AgentEventListener listener, String taskId, int round) {
+        Map<String, Object> itemSchema = Map.of(
+                "type", "object",
+                "properties", Map.of(
+                        "content", Map.of("type", "string"),
+                        "status", Map.of("type", "string",
+                                "enum", List.of("pending", "in_progress", "completed"))),
+                "required", List.of("content", "status"));
+        Map<String, Object> schema = Map.of(
+                "type", "object",
+                "properties", Map.of("todos", Map.of("type", "array", "items", itemSchema)),
+                "required", List.of("todos"));
+
+        return Tool.builder()
+                .name("write_todos")
+                .description(
+                        "Replace the task's self-maintained checklist with a new list of todo items. " +
+                        "Optional bookkeeping for multi-step work — skip it for simple, single-step " +
+                        "tasks. Each call replaces the entire list, so include every item, not just " +
+                        "the ones that changed.")
+                .params("todos: array of {content: String, status: pending|in_progress|completed}")
+                .parametersSchema(schema)
+                .func(raw -> {
+                    List<TodoItem> todos = parseTodos(raw);
+                    state.setTodos(todos);
+                    state.setUpdatedAt(System.currentTimeMillis());
+                    if (taskStore != null) taskStore.save(state);
+
+                    long pending = todos.stream().filter(t -> t.getStatus() == TodoStatus.PENDING).count();
+                    long inProgress = todos.stream().filter(t -> t.getStatus() == TodoStatus.IN_PROGRESS).count();
+                    long completed = todos.stream().filter(t -> t.getStatus() == TodoStatus.COMPLETED).count();
+
+                    listener.dispatch(AgentEvent.of(taskId, round, EventType.TODOS_UPDATED, JsonUtil.toJson(todos)));
+
+                    return "Updated " + todos.size() + " todo(s): " + pending + " pending, "
+                            + inProgress + " in progress, " + completed + " completed.";
+                })
+                .build();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<TodoItem> parseTodos(Object raw) {
+        List<TodoItem> todos = new ArrayList<>();
+        if (!(raw instanceof Map<?, ?> argsMap)) return todos;
+        Object rawTodos = ((Map<String, Object>) argsMap).get("todos");
+        if (!(rawTodos instanceof List<?> list)) return todos;
+        for (Object entry : list) {
+            if (!(entry instanceof Map<?, ?> m)) continue;
+            TodoItem item = new TodoItem();
+            Object content = m.get("content");
+            item.setContent(content != null ? content.toString() : "");
+            Object status = m.get("status");
+            try {
+                item.setStatus(TodoStatus.fromCode(status != null ? status.toString() : "pending"));
+            } catch (IllegalArgumentException e) {
+                item.setStatus(TodoStatus.PENDING);
+            }
+            todos.add(item);
+        }
+        return todos;
     }
 
     @Override

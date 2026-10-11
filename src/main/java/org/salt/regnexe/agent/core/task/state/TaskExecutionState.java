@@ -87,5 +87,12 @@ public class TaskExecutionState {
      */
     private String contextId;
 
+    /**
+     * The executor's self-maintained task checklist (the {@code write_todos} tool) — optional,
+     * model-driven, replaced wholesale on every call. Persists across rounds like everything else
+     * here, so a {@code /resume} can show what was still pending.
+     */
+    private List<TodoItem> todos;
+
     private Map<String, Object> metadata;
 }

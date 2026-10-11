@@ -86,6 +86,7 @@ public abstract class AbstractEventListener implements AgentEventListener {
             case SKILL_LLM_RESPONDED  -> "[TOOL Skill LLM]";
             case AGENT_LLM_RESPONDED  -> "[TOOL SubAgent LLM]";
             case TOOL_RESULT          -> "[TOOL Result   ]";
+            case TODOS_UPDATED        -> "[Todos Updated ]";
             case LLM_RESPONDED        -> "[Execute LLM   ]";
             case LLM_OUTPUT           -> "[LLM Output    ]";
             case EXECUTION_COMPLETED  -> "[Execute Result]";
