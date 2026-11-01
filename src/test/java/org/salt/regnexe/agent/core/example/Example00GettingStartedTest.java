@@ -49,7 +49,7 @@ import java.util.List;
  * - one full RegnexeAgent quick-start execution
  *
  * The metadata-only tests do not call an LLM. The full agent execution test
- * requires DASHSCOPE_API_KEY, like the other example tests.
+ * requires DEEPSEEK_KEY, like the other example tests.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -185,7 +185,7 @@ public class Example00GettingStartedTest {
     @Test
     public void readmeQuickStartAgentShouldFinish() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPlugin(new WeatherPlugin())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -207,7 +207,7 @@ public class Example00GettingStartedTest {
     @Test
     public void withToolQuickStartAgentShouldFinish() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -242,7 +242,7 @@ public class Example00GettingStartedTest {
                 .build();
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withSkill(travelAdvisor)
                 .withEventListener(new ConsoleEventListener())
@@ -286,7 +286,7 @@ public class Example00GettingStartedTest {
                 .build();
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withSubAgent(forecastPlanner)
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

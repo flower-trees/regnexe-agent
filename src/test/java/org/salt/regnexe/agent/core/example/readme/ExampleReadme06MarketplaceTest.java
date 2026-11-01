@@ -53,7 +53,7 @@ import java.util.Set;
  * Implementing the interface is the only requirement — {@code withPluginMarket(yourMarketplace)}
  * plugs it into the agent with no other code changes.
  *
- * Prerequisites: Test 2 needs env var DASHSCOPE_API_KEY.
+ * Prerequisites: Test 2 needs env var DEEPSEEK_KEY.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -116,7 +116,7 @@ public class ExampleReadme06MarketplaceTest {
         Assert.assertEquals("weather-plugin", weatherPlugins.get(0).getPluginId());
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)        // any Marketplace implementation plugs in here
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

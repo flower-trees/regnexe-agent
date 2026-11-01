@@ -59,7 +59,7 @@ import java.util.UUID;
  *
  * Prerequisites
  * -------------
- * Set env var DASHSCOPE_API_KEY before running.
+ * Set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -109,7 +109,7 @@ public class Example06SessionMemoryTest {
         // ── Agent with shared session storage ─────────────────────────────────
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withSessionStorage(sessionStorage)
                 .withEventListener(new ConsoleEventListener())

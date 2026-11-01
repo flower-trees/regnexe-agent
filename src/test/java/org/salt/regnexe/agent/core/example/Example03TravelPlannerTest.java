@@ -47,7 +47,7 @@ import java.util.List;
  *
  * Prerequisites
  * -------------
- * Set env var DASHSCOPE_API_KEY before running.
+ * Set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -135,7 +135,7 @@ public class Example03TravelPlannerTest {
         // ── Agent ────────────────────────────────────────────────────────────
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

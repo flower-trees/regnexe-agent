@@ -71,15 +71,15 @@ SDK 是"你调用它"，Harness 是"它驱动你"。区别在于谁掌控执行�
 <dependency>
     <groupId>io.github.flower-trees</groupId>
     <artifactId>regnexe-agent</artifactId>
-    <version>0.1.2</version>
+    <version>0.1.3</version>
 </dependency>
 ```
 
 ```yaml
 # application.yml
 models:
-  aliyun:
-    chat-key: ${ALIYUN_KEY}
+  deepseek:
+    chat-key: ${DEEPSEEK_KEY}
 ```
 
 ```java
@@ -91,7 +91,7 @@ Tool weatherTool = Tool.builder()
     .build();
 
 AgentResult result = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withTool(weatherTool)
     .build()
     .execute("Check today's weather in Beijing. Is it good for running?");

@@ -35,7 +35,7 @@ import org.springframework.test.context.junit4.SpringRunner;
  * Registers two pre-built {@link Tool} objects directly (no {@code @Plugin} class needed)
  * and lets the agent's Search -> Plan -> Execute -> Reflect loop decide how to combine them.
  *
- * Prerequisites: set env var DASHSCOPE_API_KEY before running.
+ * Prerequisites: set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -47,7 +47,7 @@ public class ExampleReadme01MultiToolTest {
     @Test
     public void multiToolGoalShouldFinish() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool(), airQualityTool())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

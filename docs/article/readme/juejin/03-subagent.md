@@ -12,7 +12,7 @@
 
 ```java
 SubAgentConfig.builder()
-    .model("aliyun:qwen-plus")   // 自己的模型，跟主 Agent 完全独立
+    .model("deepseek:deepseek-chat")   // 自己的模型，跟主 Agent 完全独立
     .ownTools(List.of(myPrivateTool))   // 私有工具，外面看不到
     .build();
 ```
@@ -29,7 +29,7 @@ SubAgentConfig.builder()
 
 ## 🛠️ 实战代码
 
-仓库 `ExampleReadme03SubAgentTest`：一个 `expense_estimator` Sub-Agent，自己的模型 `aliyun:qwen-plus`，自己的私有工具 `estimate_trip_cost`：
+仓库 `ExampleReadme03SubAgentTest`：一个 `expense_estimator` Sub-Agent，自己的模型 `deepseek:deepseek-chat`，自己的私有工具 `estimate_trip_cost`：
 
 ```java
 // 私有工具：只在 SubAgent 内部执行器里可见，通过 ownTools 注入
@@ -44,7 +44,7 @@ SubAgentConfig expenseEstimator = SubAgentConfig.builder()
         .name("expense_estimator")
         .description("Estimates the total cost of a business trip. " +
                      "TRIGGER: Use when the user asks for a trip budget or cost estimate.")
-        .model("aliyun:qwen-plus")      // 自己的模型，独立于主 Agent 的默认模型
+        .model("deepseek:deepseek-chat")      // 自己的模型，独立于主 Agent 的默认模型
         .systemPrompt("""
                 You are a travel expense estimator.
                 1. Call estimate_trip_cost with the trip length and destination.
@@ -54,7 +54,7 @@ SubAgentConfig expenseEstimator = SubAgentConfig.builder()
         .build();
 
 RegnexeAgent agent = regnexeAgentBuilder
-        .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")   // 主 Agent 用的模型
+        .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")   // 主 Agent 用的模型
         .withSubAgent(expenseEstimator)
         .withEventListener(new ConsoleEventListener())
         .withMaxRounds(3)
@@ -63,7 +63,7 @@ RegnexeAgent agent = regnexeAgentBuilder
 AgentResult result = agent.execute("What would a 3-day business trip to Chengdu cost?");
 ```
 
-主 Agent 跑 `deepseek-v4-flash`，`expense_estimator` 内部跑 `aliyun:qwen-plus`，两个模型互不干扰，账单也分得清清楚楚。
+主 Agent 跑 `deepseek-v4-flash`，`expense_estimator` 内部跑 `deepseek:deepseek-chat`，两个模型互不干扰，账单也分得清清楚楚。
 
 ## 🔐 关键点：ownTools 为什么外面真的看不到
 

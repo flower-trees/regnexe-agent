@@ -56,7 +56,7 @@ import java.util.List;
  * Test 3 (no LLM): file-system directory — {@code DefaultPluginManager.addDirectory(...)} loads
  * a {@code plugin.yaml} + {@code tools/} folder from disk.
  *
- * Prerequisites: Test 1 needs env var DASHSCOPE_API_KEY; Tests 2-3 do not call an LLM.
+ * Prerequisites: Test 1 needs env var DEEPSEEK_KEY; Tests 2-3 do not call an LLM.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -115,7 +115,7 @@ public class ExampleReadme05PluginPackagingTest {
         Assert.assertEquals(CapabilityType.SUB_AGENT, findCapability(tripPlugin, "trip-plugin.expense_estimator").getType());
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPlugin(tripPlugin)        // installs the PluginDescriptor directly — no marketplace to construct
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

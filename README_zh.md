@@ -53,7 +53,7 @@ Regnexe 不是一次 LLM 工具调用的简单封装。它围绕一个目标运�
 <dependency>
     <groupId>io.github.flower-trees</groupId>
     <artifactId>regnexe-agent</artifactId>
-    <version>0.1.2</version>
+    <version>0.1.3</version>
 </dependency>
 ```
 
@@ -62,8 +62,6 @@ Regnexe 不是一次 LLM 工具调用的简单封装。它围绕一个目标运�
 ```yaml
 # application.yml
 models:
-  aliyun:
-    chat-key: ${ALIYUN_KEY}
   deepseek:
     chat-key: ${DEEPSEEK_KEY}
 ```
@@ -90,7 +88,7 @@ Tool airQualityTool = Tool.builder()
     .build();
 
 AgentResult result = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withTool(weatherTool, airQualityTool)        // ← 可变参数，按需注册多个
     .withEventListener(new ConsoleEventListener())
     .build()
@@ -106,7 +104,7 @@ System.out.println(result.getFinalText());          // FINISHED
 ```
 [Agent Start   ] R0 Goal: 查询北京今天的天气和空气质量... | maxRounds: 3
 [Search Result ] R1 Found 2 capabilities: get_weather, get_air_quality
-[Plan Result   ] R1 Selected: [get_weather, get_air_quality] | Strategy: SYNTHESIZE | ...
+[Plan Result   ] R1 Selected: [get_weather, get_air_quality] | ...
 [TOOL Call     ] R1 mcp_tool:get_weather {"city": "Beijing"}
 [TOOL Result   ] R1 mcp_tool:get_weather -> 北京：晴，22°C。
 [TOOL Call     ] R1 mcp_tool:get_air_quality {"city": "Beijing"}
@@ -138,7 +136,7 @@ SkillConfig travelAdvisor = SkillConfig.builder()
     .build();
 
 RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withTool(weatherTool)     // Skill 借用的工具必须已经在市场里
     .withSkill(travelAdvisor)
     .build();
@@ -153,7 +151,7 @@ SubAgentConfig expenseEstimator = SubAgentConfig.builder()
     .name("expense_estimator")
     .description("估算商务出行的总花费。" +
                  "TRIGGER: 用户询问行程预算或费用估算时使用。")
-    .model("aliyun:qwen-plus")        // 自己的模型，独立于父 Agent 的默认模型
+    .model("deepseek:deepseek-chat")        // 自己的模型，独立于父 Agent 的默认模型
     .systemPrompt("""
             你是一个出行费用估算师。
             1. 调用 estimate_trip_cost，传入行程天数和目的地。
@@ -163,7 +161,7 @@ SubAgentConfig expenseEstimator = SubAgentConfig.builder()
     .build();
 
 RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withSubAgent(expenseEstimator)
     .build();
 ```
@@ -233,7 +231,7 @@ public class WeatherPlugin {
         id = "expense_estimator",
         description = "估算商务出行的总花费。" +
                       "TRIGGER: 用户询问行程预算或费用估算时使用。",
-        model = "aliyun:qwen-plus",
+        model = "deepseek:deepseek-chat",
         systemPrompt = """
                 你是一个出行费用估算师。
                 1. 调用 estimate_trip_cost，传入行程天数和目的地。
@@ -252,7 +250,7 @@ public class WeatherPlugin {
 
 ```java
 AgentResult result = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withPlugin(new WeatherPlugin())
     .build()
     .execute("查询北京今天的天气和空气质量，告诉我是否适合户外跑步");
@@ -445,23 +443,34 @@ new Slf4jEventListener(true, true);       // 全部显示，包括 token 用量�
 
 想写自己的监听器，继承 `AbstractEventListener`（或者直接实现 `AgentEventListener` 获得完全的过滤控制权）——重写 `onEvent`，需要的话再重写 `shouldHandle` 精确挑选关心的 `EventType`。
 
+
+支持重复调用 `.withEventListener(...)` 注册多个监听器。多个监听器时，一个监听器抛出的运行时异常会被记录，后续监听器仍会接收事件；只有一个监听器时保留异常传播行为。
+
+`AgentEvent.spanId` 和 `parentSpanId` 用于重建 Search / Plan / Execute / Reflect、Skill、SubAgent 和工具调用之间的调用树。Plan / Reflect 的模型输出及 Token 用量也进入事件流。
+
 ## 9. 暂停与恢复
 
-`pause()` 可以从任意线程调用，线程安全。当前执行会被标记为 `PAUSED` 并持久化到配置的 `TaskStore`；`resume()` 会找到该 session 下最近一个可恢复任务，带着新上下文继续。代码见 [`ExampleReadme08PauseResumeTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme08PauseResumeTest.java)。
+`pause()` 可从其他线程发送停止信号；执行器在安全检查点响应后，任务进入 `PAUSED`。在任务已开始执行后发送信号，并等待原调用结束，再调用 `resume()`，同一实例不支持并发执行多个 `execute()` / `resume()`。
+
+`resume(sessionId, supplementInput)` 加载该会话最近更新的非 `FINISHED` 任务，保留轮次、执行步骤和摘要，将补充指令追加到目标后继续。`RUNNING`、`PAUSED`、`FAILED`、`ESCALATED`、`TIMEOUT` 均属于可恢复状态；若已达到轮次上限，会增加后续执行轮次。恢复不保证任务最终成功，也不保证外部工具副作用只执行一次。
+
+默认 `InMemoryTaskStore` 仅保存在当前进程，进程重启后无法恢复；跨进程恢复需实现持久化 `TaskStore`，保存完整任务状态。完整迁移说明见 [0.1.3 发布说明](docs/release/pr-0.1.3.md)。
 
 ```java
 RegnexeAgent agent = regnexeAgentBuilder
     .withTool(weatherTool)
-    .withTaskStore(new InMemoryTaskStore())   // 暂停/恢复必须要有持久化状态
+    .withTaskStore(new InMemoryTaskStore())   // 当前进程内保存任务状态
     .build();
 
 Future<AgentResult> future = executor.submit(() -> agent.execute(request));
 
-agent.pause();                       // 可以从任意线程调用
-AgentResult paused = future.get();   // status == PAUSED
+agent.pause();                       // 在执行器已开始工作后，从其他线程发送信号
+AgentResult paused = future.get();   // 检查实际状态；任务可能已经完成
 
-AgentResult done = agent.resume(sessionId, "请同时考虑今天的空气质量指数。");
-// done.getStatus() == FINISHED
+if (paused.getStatus() == TaskStatus.PAUSED) {
+    AgentResult done = agent.resume(sessionId, "请同时考虑今天的空气质量指数。");
+    System.out.println(done.getStatus()); // 检查恢复后的实际状态
+}
 ```
 
 ## 参考文档
@@ -483,7 +492,7 @@ AgentResult done = agent.resume(sessionId, "请同时考虑今天的空气质量
 | `withDirectory(String...)` | - | 从文件系统目录加载插件 |
 | `withPluginMarket(Marketplace)` | 空 `SimpleMarketplace` | 完全接管插件市场 |
 | `withMaxRounds(int)` | `10` | 最大推理轮次 |
-| `withEventListener(AgentEventListener)` | `NO_OP` | 监听 Agent 启动、执行、完成等事件 |
+| `withEventListener(AgentEventListener)` | `NO_OP` | 可重复注册，按注册顺序通知各监听器 |
 | `withTaskStore(TaskStore)` | `InMemoryTaskStore` | 任务状态存储，影响暂停和恢复 |
 | `withResultComposer(ResultComposer)` | `DefaultResultComposer` | 最终答案组装策略 |
 | `withSessionStorage(ConversationStorage)` | `InMemoryConversationStorage` | 会话记忆存储 |
@@ -521,7 +530,7 @@ AgentResult done = agent.resume(sessionId, "请同时考虑今天的空气质量
 | `PAUSED` | 被 `pause()` 中断，可恢复 |
 | `TIMEOUT` | 达到 `maxRounds` 上限 |
 | `ESCALATED` | Reflector 判断需要人工介入 |
-| `FAILED` | 不可恢复错误 |
+| `FAILED` | 执行失败，保存的任务可通过 `resume()` 重试 |
 
 </details>
 

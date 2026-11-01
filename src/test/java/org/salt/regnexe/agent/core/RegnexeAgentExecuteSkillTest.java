@@ -46,7 +46,7 @@ import java.util.List;
  * Search/Plan/Reflect.
  *
  * <p>Tests 1–2 are pure validation (no LLM call). Tests 3–4 run a real Skill against a live
- * model (needs DASHSCOPE_API_KEY, same prerequisite as Example05PluginLoadingTest's
+ * model (needs DEEPSEEK_KEY, same prerequisite as Example05PluginLoadingTest's
  * integration tests).
  */
 @RunWith(SpringRunner.class)
@@ -61,7 +61,7 @@ public class RegnexeAgentExecuteSkillTest {
     @Test
     public void unknownCapabilityIdShouldThrow() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .build();
 
         try {
@@ -93,7 +93,7 @@ public class RegnexeAgentExecuteSkillTest {
                 .build());
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .build();
 
@@ -115,7 +115,7 @@ public class RegnexeAgentExecuteSkillTest {
             AgentEventListener listener = event -> observedTypes.add(event.getType());
 
             RegnexeAgent agent = regnexeAgentBuilder
-                    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                     .withDirectory(baseDir.toString())
                     .withEventListener(listener)
                     .build();
@@ -151,7 +151,7 @@ public class RegnexeAgentExecuteSkillTest {
             RecordingConversationMemory memory = new RecordingConversationMemory();
 
             RegnexeAgent agent = regnexeAgentBuilder
-                    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                     .withDirectory(baseDir.toString())
                     .withSessionMemory(memory)
                     .build();
@@ -176,7 +176,7 @@ public class RegnexeAgentExecuteSkillTest {
         Path explicitWorkspace = Files.createTempDirectory("regnexe-explicit-workspace-");
         try {
             RegnexeAgent agent = regnexeAgentBuilder
-                    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                     .withDirectory(pluginBaseDir.toString())
                     .withClaudeCompatWorkspace(explicitWorkspace)
                     .build();

@@ -4,7 +4,7 @@
 
   <groupId>io.github.flower-trees</groupId>
   <artifactId>regnexe-agent</artifactId>
-  <version>0.1.3-SNAPSHOT</version>
+  <version>0.1.3</version>
   <packaging>jar</packaging>
 
   <name>regnexe-agent</name>
@@ -40,7 +40,7 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <j.langchain.version>1.0.19-SNAPSHOT</j.langchain.version>
+    <j.langchain.version>1.0.19</j.langchain.version>
     <lombok.version>1.18.24</lombok.version>
   </properties>
 
@@ -158,4 +158,32 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <!-- Explicit local regression suite; default test selection remains unchanged. -->
+    <profile>
+      <id>local-tests</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <failIfNoTests>true</failIfNoTests>
+              <includes>
+                <include>**/LoopSpansTest.java</include>
+                <include>**/CompositeEventListenerTest.java</include>
+                <include>**/SimpleMarketplaceTest.java</include>
+                <include>**/PluginCacheInstallerTest.java</include>
+                <include>**/CachedPluginLoadingTest.java</include>
+                <include>**/DefaultPluginManagerManifestCompatTest.java</include>
+                <include>**/ScopeResolverTest.java</include>
+                <include>**/EnabledStateLoaderTest.java</include>
+                <include>**/EnabledStateWriterTest.java</include>
+              </includes>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

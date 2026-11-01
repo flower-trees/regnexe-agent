@@ -36,12 +36,12 @@ import java.util.List;
  * README — Sub-Agent: {@code withSubAgent(SubAgentConfig...)}.
  *
  * Unlike a Skill, a Sub-Agent can own a <b>different model</b> from the parent
- * ({@code model("aliyun:qwen-plus")} below, while the master agent runs "deepseek-v4-flash"),
+ * ({@code model("deepseek:deepseek-chat")} below, while the master agent runs "deepseek-v4-flash"),
  * and its tools ({@code ownTools}) are <b>private</b> — never registered in the marketplace,
  * so the outer agent can never call them directly. Use it for an independent sub-task that
  * needs its own reasoning loop, its own tools, or a cheaper/faster model.
  *
- * Prerequisites: set env var DASHSCOPE_API_KEY before running.
+ * Prerequisites: set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -64,7 +64,7 @@ public class ExampleReadme03SubAgentTest {
                 .name("expense_estimator")
                 .description("Estimates the total cost of a business trip. " +
                              "TRIGGER: Use when the user asks for a trip budget or cost estimate.")
-                .model("aliyun:qwen-plus")      // its own model, independent of the parent's default model
+                .model("deepseek:deepseek-chat")      // its own model, independent of the parent's default model
                 .systemPrompt("""
                         You are a travel expense estimator.
                         1. Call estimate_trip_cost with the trip length and destination.
@@ -74,7 +74,7 @@ public class ExampleReadme03SubAgentTest {
                 .build();
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withSubAgent(expenseEstimator)
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

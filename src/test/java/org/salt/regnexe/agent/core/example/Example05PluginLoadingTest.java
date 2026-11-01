@@ -63,15 +63,15 @@ import java.util.List;
  *   loadFromDirectory() creates a SUB_AGENT descriptor with subAgentConfig set and tool == null.
  *   No LLM required.
  *
- * Test 6 — registerBeanShouldRunAgent (integration — needs DASHSCOPE_API_KEY)
+ * Test 6 — registerBeanShouldRunAgent (integration — needs DEEPSEEK_KEY)
  *   Full agent run via @Plugin bean. Expects FINISHED.
  *
- * Test 7 — dirPluginToolShouldRunAgent (integration — needs DASHSCOPE_API_KEY + bash)
+ * Test 7 — dirPluginToolShouldRunAgent (integration — needs DEEPSEEK_KEY + bash)
  *   Full agent run using a shell-script tool loaded from a temp directory. Expects FINISHED.
  *
  * Prerequisites for Tests 6–7
  * ----------------------------
- * Set env var DASHSCOPE_API_KEY before running.
+ * Set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -213,7 +213,7 @@ public class Example05PluginLoadingTest {
         );
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -242,7 +242,7 @@ public class Example05PluginLoadingTest {
             marketplace.load(new DefaultPluginManager().addDirectory(baseDir.toString()));
 
             RegnexeAgent agent = regnexeAgentBuilder
-                    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                     .withPluginMarket(marketplace)
                     .withEventListener(new ConsoleEventListener())
                     .withMaxRounds(3)
@@ -269,7 +269,7 @@ public class Example05PluginLoadingTest {
     @Test
     public void builderWithScanPackagesShouldRunAgent() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withScanPackages("org.salt.regnexe.agent.core.example.testplugins")
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -295,7 +295,7 @@ public class Example05PluginLoadingTest {
         Path baseDir = buildTempPluginDir(true, true);
         try {
             RegnexeAgent agent = regnexeAgentBuilder
-                    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                     .withDirectory(baseDir.toString())
                     .withEventListener(new ConsoleEventListener())
                     .withMaxRounds(3)

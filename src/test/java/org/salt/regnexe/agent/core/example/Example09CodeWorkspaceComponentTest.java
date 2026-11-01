@@ -53,7 +53,7 @@ import java.util.stream.Stream;
  *
  * <p>This example shows how workspace operations can be wrapped as controlled
  * tools and then exposed through a single SubAgent capability. The direct tool
- * tests do not call an LLM. The final SubAgent test requires DASHSCOPE_API_KEY,
+ * tests do not call an LLM. The final SubAgent test requires DEEPSEEK_KEY,
  * like the other full agent examples.
  */
 @RunWith(SpringRunner.class)
@@ -165,7 +165,7 @@ public class Example09CodeWorkspaceComponentTest {
                 marketplace.resolveDescriptor("search_code"));
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
