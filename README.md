@@ -39,17 +39,15 @@ This README goes from "one tool call" to the full framework, one layer at a time
 <dependency>
     <groupId>io.github.flower-trees</groupId>
     <artifactId>regnexe-agent</artifactId>
-    <version>0.1.2</version>
+    <version>0.1.3</version>
 </dependency>
 ```
 
 ### Configure your LLM
 
 ```yaml
-# application.yml — choose one
+# application.yml
 models:
-  aliyun:
-    chat-key: ${ALIYUN_KEY}      # Aliyun DashScope (deepseek-v4-flash, qwen, etc.)
   deepseek:
     chat-key: ${DEEPSEEK_KEY}    # DeepSeek official API
 ```
@@ -74,7 +72,7 @@ Tool airQualityTool = Tool.builder()
     .build();
 
 AgentResult result = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withTool(weatherTool, airQualityTool)          // ← varargs, register as many as you need
     .withEventListener(new ConsoleEventListener())
     .build()
@@ -90,7 +88,7 @@ No `@EnableXxx`. No XML. `RegnexeAgentBuilder` is auto-configured by Spring Boot
 ```
 [Agent Start   ] R0 Goal: Check today's weather and air quality in Beijing... | maxRounds: 3
 [Search Result ] R1 Found 2 capabilities: get_weather, get_air_quality
-[Plan Result   ] R1 Selected: [get_weather, get_air_quality] | Strategy: SYNTHESIZE | ...
+[Plan Result   ] R1 Selected: [get_weather, get_air_quality] | ...
 [TOOL Call     ] R1 mcp_tool:get_weather {"city": "Beijing"}
 [TOOL Result   ] R1 mcp_tool:get_weather -> Beijing: sunny, 22 C.
 [TOOL Call     ] R1 mcp_tool:get_air_quality {"city": "Beijing"}
@@ -124,7 +122,7 @@ SkillConfig travelAdvisor = SkillConfig.builder()
     .build();
 
 RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withTool(weatherTool)     // the tool a Skill borrows must already be in the marketplace
     .withSkill(travelAdvisor)
     .build();
@@ -139,7 +137,7 @@ SubAgentConfig expenseEstimator = SubAgentConfig.builder()
     .name("expense_estimator")
     .description("Estimates the total cost of a business trip. " +
                  "TRIGGER: Use when the user asks for a trip budget or cost estimate.")
-    .model("aliyun:qwen-plus")        // its own model, independent of the parent's default model
+    .model("deepseek:deepseek-chat")        // its own model, independent of the parent's default model
     .systemPrompt("""
             You are a travel expense estimator.
             1. Call estimate_trip_cost with the trip length and destination.
@@ -149,7 +147,7 @@ SubAgentConfig expenseEstimator = SubAgentConfig.builder()
     .build();
 
 RegnexeAgent agent = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withSubAgent(expenseEstimator)
     .build();
 ```
@@ -224,7 +222,7 @@ public class WeatherPlugin {
         id = "expense_estimator",
         description = "Estimates the total cost of a business trip. " +
                        "TRIGGER: Use when the user asks for a trip budget or cost estimate.",
-        model = "aliyun:qwen-plus",
+        model = "deepseek:deepseek-chat",
         systemPrompt = """
                 You are a travel expense estimator.
                 1. Call estimate_trip_cost with the trip length and destination.
@@ -243,7 +241,7 @@ public class WeatherPlugin {
 
 ```java
 AgentResult result = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withPlugin(new WeatherPlugin())
     .build()
     .execute("Check today's weather and air quality in Beijing, then tell me if it's good for outdoor running.");
@@ -440,23 +438,34 @@ Write your own listener by extending `AbstractEventListener` (or implementing `A
 
 ---
 
+
+Call `.withEventListener(...)` repeatedly to register multiple listeners. With multiple listeners, a runtime exception in one listener is logged and later listeners still receive the event. A single listener retains the original exception propagation behavior.
+
+`AgentEvent.spanId` and `parentSpanId` identify the call tree across Search / Plan / Execute / Reflect, Skills, SubAgents, and tools. Plan / Reflect model output and token usage are also reported through events.
+
 ## 9. Pause & Resume
 
-`pause()` is thread-safe and can be called from any thread while a task is running. The task transitions to `PAUSED` and persists in the configured `TaskStore`; `resume()` picks up the most recent resumable task for that session and continues with extra context. See [`ExampleReadme08PauseResumeTest`](src/test/java/org/salt/regnexe/agent/core/example/readme/ExampleReadme08PauseResumeTest.java).
+`pause()` sends a stop signal from another thread. The task enters `PAUSED` after the executor responds at a safe checkpoint. Send the signal after execution has started, wait for the original call to end, then call `resume()`. Do not run concurrent `execute()` / `resume()` calls on the same instance.
+
+`resume(sessionId, supplementInput)` loads the session's most recently updated non-`FINISHED` task, retains rounds, steps, and summaries, appends the extra instruction to the goal, and continues. Resumable statuses are `RUNNING`, `PAUSED`, `FAILED`, `ESCALATED`, and `TIMEOUT`. Additional rounds are granted if the task has reached its round limit. Resuming does not guarantee success or exactly-once execution of external tool side effects.
+
+The default `InMemoryTaskStore` only retains state in the current process. Recovery after a restart requires a persistent `TaskStore` implementation that saves complete task state. See the [0.1.3 release notes](docs/release/pr-0.1.3-en.md) for migration details.
 
 ```java
 RegnexeAgent agent = regnexeAgentBuilder
     .withTool(weatherTool)
-    .withTaskStore(new InMemoryTaskStore())   // required: pause/resume needs persisted state
+    .withTaskStore(new InMemoryTaskStore())   // retain task state within this process
     .build();
 
 Future<AgentResult> future = executor.submit(() -> agent.execute(request));
 
-agent.pause();                       // safe to call from any thread
-AgentResult paused = future.get();   // status == PAUSED
+agent.pause();                       // signal from another thread after execution starts
+AgentResult paused = future.get();   // inspect status: the task may already have finished
 
-AgentResult done = agent.resume(sessionId, "Also factor in today's air quality index.");
-// done.getStatus() == FINISHED
+if (paused.getStatus() == TaskStatus.PAUSED) {
+    AgentResult done = agent.resume(sessionId, "Also factor in today's air quality index.");
+    System.out.println(done.getStatus()); // inspect the actual resumed status
+}
 ```
 
 ---
@@ -479,7 +488,7 @@ AgentResult done = agent.resume(sessionId, "Also factor in today's air quality i
 | `withDirectory(String...)` | — | Load plugins from file-system directories (creates marketplace automatically) |
 | `withPluginMarket(Marketplace)` | empty marketplace | Full marketplace control |
 | `withMaxRounds(int)` | `10` | Max reasoning iterations |
-| `withEventListener(AgentEventListener)` | no-op | Hook for LLM output, tool calls, results |
+| `withEventListener(AgentEventListener)` | no-op | Repeatable registration; listeners are notified in registration order |
 | `withTaskStore(TaskStore)` | `InMemoryTaskStore` | State persistence for pause/resume |
 | `withResultComposer(ResultComposer)` | `DefaultResultComposer` | Final answer assembly strategy |
 | `withSessionStorage(ConversationStorage)` | `InMemoryConversationStorage` | Cross-turn memory |
@@ -519,7 +528,7 @@ All API endpoint URLs are pre-configured. Set the env var or add `chat-key` unde
 | `PAUSED` | Interrupted by `pause()`, resumable |
 | `TIMEOUT` | Hit `maxRounds` limit |
 | `ESCALATED` | Reflector flagged for human review |
-| `FAILED` | Unrecoverable error |
+| `FAILED` | Execution failed; saved tasks can be retried through `resume()` |
 
 </details>
 

@@ -24,9 +24,9 @@ import org.salt.regnexe.agent.core.TestApplication;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.plugin.AgentSkill;
-import org.salt.regnexe.agent.core.market.plugin.AgentSubAgent;
-import org.salt.regnexe.agent.core.market.plugin.Plugin;
+import org.salt.regnexe.agent.core.marketplace.plugin.AgentSkill;
+import org.salt.regnexe.agent.core.marketplace.plugin.AgentSubAgent;
+import org.salt.regnexe.agent.core.marketplace.plugin.Plugin;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -50,7 +50,7 @@ import org.springframework.test.context.junit4.SpringRunner;
  * {@code @AgentSubAgent} reuses {@code @AgentTool} for its private {@code ownTools}, exactly like
  * the outer {@code @Plugin} does for MCP_TOOL — the only difference is the resulting capability type.
  *
- * Prerequisites: set env var DASHSCOPE_API_KEY before running.
+ * Prerequisites: set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -115,7 +115,7 @@ public class ExampleReadme04PluginAnnotationTest {
     /** One @Plugin registration bundles both tools, the skill, and the sub-agent below. */
     private RegnexeAgent buildAgent() {
         return regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPlugin(new WeatherPlugin())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -156,7 +156,7 @@ public class ExampleReadme04PluginAnnotationTest {
                 id = "expense_estimator",
                 description = "Estimates the total cost of a business trip. " +
                               "TRIGGER: Use when the user asks for a trip budget or cost estimate.",
-                model = "aliyun:qwen-plus",
+                model = "deepseek:deepseek-chat",
                 systemPrompt = """
                         You are a travel expense estimator.
                         1. Call estimate_trip_cost with the trip length and destination.

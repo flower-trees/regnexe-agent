@@ -17,15 +17,20 @@ package org.salt.regnexe.agent.core;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
+import org.salt.regnexe.agent.core.event.CompositeEventListener;
 import org.salt.regnexe.agent.core.event.TokenAggregatingEventListener;
 import org.salt.regnexe.agent.core.llm.DefaultModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.DefaultPluginManager;
-import org.salt.regnexe.agent.core.market.Marketplace;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.scope.EnabledStateLoader;
+import org.salt.regnexe.agent.core.marketplace.scope.Scope;
+import org.salt.regnexe.agent.core.marketplace.scope.ScopeResolver;
+import org.salt.regnexe.agent.core.marketplace.scope.ScopedEnabledState;
 import org.salt.regnexe.agent.core.task.DefaultResultComposer;
 import org.salt.regnexe.agent.core.task.ResultComposer;
 import org.salt.regnexe.agent.core.task.store.InMemoryTaskStore;
@@ -45,6 +50,10 @@ import org.salt.jlangchain.core.skill.SkillConfig;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Spring-managed factory for {@link RegnexeAgent} instances.
@@ -94,6 +103,10 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model);
     }
 
+    public Builder withDefaultModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+        return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model, kwargs);
+    }
+
     public Builder withDefaultModel(Vendor vendor, String model) {
         return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model);
     }
@@ -116,6 +129,14 @@ public class RegnexeAgentBuilder {
 
     public Builder withSessionBufferSize(int maxSize) {
         return new Builder(flowEngine, chainActor).withSessionBufferSize(maxSize);
+    }
+
+    /**
+     * Trigger threshold for the default session-memory compaction strategy
+     * ({@code PeriodicConversationSummaryMemory}) — see {@code Builder#withSessionCompactPeriod}.
+     */
+    public Builder withSessionCompactPeriod(int period) {
+        return new Builder(flowEngine, chainActor).withSessionCompactPeriod(period);
     }
 
     public Builder withAgentContext(AgentContext context) {
@@ -145,9 +166,23 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withScanPackages(basePackages);
     }
 
-    /** Convenience: load plugins from file-system directories without constructing a marketplace manually. */
+    /** Convenience: load manifest-based plugins from file-system directories without constructing a marketplace manually. */
     public Builder withDirectory(String... dirs) {
         return new Builder(flowEngine, chainActor).withDirectory(dirs);
+    }
+
+    /** Convenience: load manifest-less, directly-editable skills (skills/&lt;name&gt;/SKILL.md) without constructing a marketplace manually. */
+    public Builder withSkillsDirectory(String... dirs) {
+        return new Builder(flowEngine, chainActor).withSkillsDirectory(dirs);
+    }
+
+    /**
+     * Convenience: load one or more already-resolved plugin directories (each directory itself
+     * carries the manifest — e.g. {@code cache/<plugin-id>/<hash>/} paths resolved by
+     * {@code PluginCacheInstaller}) without constructing a marketplace manually.
+     */
+    public Builder withPluginDirectory(String... dirs) {
+        return new Builder(flowEngine, chainActor).withPluginDirectory(dirs);
     }
 
     /** Convenience: register one or more pre-built Tool objects directly as MCP_TOOL capabilities. */
@@ -177,18 +212,27 @@ public class RegnexeAgentBuilder {
         private ModelProvider llmProvider;
         private BaseChatModel directLlm;
         private ModelSpec defaultModel;
+        private ModelSpec plannerModel;
+        private ModelSpec reflectorModel;
         private Marketplace marketplace;
         private TaskStore taskStore;
         private ResultComposer resultComposer;
         private int maxRounds = DEFAULT_MAX_ROUNDS;
-        private AgentEventListener eventListener;
+        private final List<AgentEventListener> eventListeners = new ArrayList<>();
         private ConversationStorage sessionStorage;
         private int sessionBufferSize = 10;
+        private int sessionCompactPeriod = 20;
         private AgentContext agentContext;
         private int maxAgentIterations = 20;
+        private int maxConsecutiveToolFailures = 5;
         private int maxContextOutputChars = 2000;
         private boolean verbose = false;
         private ConversationMemory sessionMemory;
+        private java.nio.file.Path claudeCompatWorkspace;
+        private String projectMemory;
+        // Names of tools registered via withTool() — see ContextBusKeys.BASE_TOOL_NAMES javadoc.
+        // LinkedHashSet: dedupes across repeated/varargs withTool() calls while keeping registration order.
+        private final java.util.Set<String> baseToolNames = new java.util.LinkedHashSet<>();
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -210,6 +254,14 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /** Same as {@link #withDefaultModel(String, String)}, plus vendor-specific extra request
+         * params (e.g. {@code Map.of("thinking", Map.of("type", "disabled"))}) — see
+         * {@link ModelSpec#of(String, String, java.util.Map)}'s javadoc. */
+        public Builder withDefaultModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+            this.defaultModel = ModelSpec.of(vendor, model, kwargs);
+            return this;
+        }
+
         public Builder withDefaultModel(Vendor vendor, String model) {
             this.defaultModel = ModelSpec.of(vendor, model);
             return this;
@@ -218,6 +270,43 @@ public class RegnexeAgentBuilder {
         public Builder withDefaultModel(BaseChatModel llm) {
             this.directLlm = llm;
             this.defaultModel = ModelSpec.of("_direct_");
+            return this;
+        }
+
+        /**
+         * Optional per-role override: run TaskPlanner's structured-JSON planning call on a
+         * different model than Execute (which stays on {@link #withDefaultModel}). Unset means
+         * Planner uses the default model too — see {@code ContextBusKeys.PLANNER_MODEL}'s javadoc
+         * for why this specific role is a reasonable place to spend more on a stronger model
+         * without the cost scaling the way Execute's would (one small JSON call per round, not a
+         * multi-iteration tool-calling loop).
+         */
+        public Builder withPlannerModel(String vendor, String model) {
+            this.plannerModel = ModelSpec.of(vendor, model);
+            return this;
+        }
+
+        /** Same as {@link #withPlannerModel(String, String)}, plus vendor-specific extra request params. */
+        public Builder withPlannerModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+            this.plannerModel = ModelSpec.of(vendor, model, kwargs);
+            return this;
+        }
+
+        /**
+         * Optional per-role override: run Reflector's FINISH/CONTINUE/ESCALATE judgment on a
+         * different model than Execute. Unset means Reflector uses the default model too — see
+         * {@code ContextBusKeys.REFLECTOR_MODEL}'s javadoc: a wrong FINISH verdict is a one-way
+         * door (the task ends; no later round can catch and correct it), unlike a Planner or
+         * Execute mistake, so judgment quality here has outsized leverage.
+         */
+        public Builder withReflectorModel(String vendor, String model) {
+            this.reflectorModel = ModelSpec.of(vendor, model);
+            return this;
+        }
+
+        /** Same as {@link #withReflectorModel(String, String)}, plus vendor-specific extra request params. */
+        public Builder withReflectorModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+            this.reflectorModel = ModelSpec.of(vendor, model, kwargs);
             return this;
         }
 
@@ -241,9 +330,21 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /**
+         * Registers an event listener. May be called more than once: every listener receives
+         * every event, in registration order.
+         */
         public Builder withEventListener(AgentEventListener listener) {
-            this.eventListener = listener;
+            if (listener != null) this.eventListeners.add(listener);
             return this;
+        }
+
+        private AgentEventListener resolveEventListener() {
+            if (eventListeners.isEmpty()) return AgentEventListener.NO_OP;
+            // A single listener is passed through unwrapped, so its exceptions keep propagating
+            // exactly as before multiple listeners were supported.
+            if (eventListeners.size() == 1) return eventListeners.get(0);
+            return new CompositeEventListener(eventListeners);
         }
 
         public Builder withSessionStorage(ConversationStorage storage) {
@@ -253,6 +354,21 @@ public class RegnexeAgentBuilder {
 
         public Builder withSessionBufferSize(int maxSize) {
             this.sessionBufferSize = maxSize;
+            return this;
+        }
+
+        /**
+         * Trigger threshold for the default session-memory compaction strategy
+         * ({@code PeriodicConversationSummaryMemory}, used when no explicit
+         * {@link #withSessionMemory} is set) — once the raw-turn buffer reaches this many
+         * turns, they're compressed into the rolling summary in one LLM call and the buffer
+         * clears. Default 20 — batching the compaction like this means far fewer summarization
+         * calls on long sessions than compressing one turn every time the buffer overflows. Has
+         * no effect if {@link #withSessionMemory} is set explicitly — that strategy's own trigger
+         * rule (if any) takes over.
+         */
+        public Builder withSessionCompactPeriod(int period) {
+            this.sessionCompactPeriod = period;
             return this;
         }
 
@@ -266,6 +382,22 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /**
+         * Caps how many tool calls in a row are allowed to fail before the executor aborts the
+         * round with a diagnostic, instead of grinding through the rest of the {@code
+         * maxAgentIterations} budget retrying the same broken thing. Wires j-langchain's
+         * {@code McpAgentExecutor.Builder.maxConsecutiveToolFailures} — previously never set by
+         * regnexe (defaulted to j-langchain's own {@code 0}, which disables the check entirely).
+         * Found via a real Playwright-MCP article-writing test: a genuinely broken external
+         * dependency (an admin login endpoint rejecting real credentials) kept getting retried by
+         * the model turn after turn until the whole run hit {@code maxAgentIterations} instead of
+         * failing fast on that one dependency a few tries in.
+         */
+        public Builder withMaxConsecutiveToolFailures(int maxConsecutiveToolFailures) {
+            this.maxConsecutiveToolFailures = maxConsecutiveToolFailures;
+            return this;
+        }
+
         public Builder withMaxContextOutputChars(int maxChars) {
             this.maxContextOutputChars = maxChars;
             return this;
@@ -273,6 +405,32 @@ public class RegnexeAgentBuilder {
 
         public Builder withVerbose(boolean verbose) {
             this.verbose = verbose;
+            return this;
+        }
+
+        /**
+         * Root directory for {@link org.salt.jlangchain.core.skill.Skill}'s Claude-compatible
+         * mode scoped filesystem tools (see {@code Skill.Builder#claudeCompatWorkspace}),
+         * applied to every SKILL capability this agent runs (both planner-selected and
+         * {@link RegnexeAgent#executeSkill} direct invocation). Unset means each skill gets its
+         * own throwaway temp directory — set this to give skills real, persistent access to
+         * (typically) your plugin/skill directory tree, so a skill-authoring skill can see and
+         * edit existing skills instead of starting from an empty sandbox every time.
+         */
+        public Builder withClaudeCompatWorkspace(java.nio.file.Path workspace) {
+            this.claudeCompatWorkspace = workspace;
+            return this;
+        }
+
+        /**
+         * Long-term project memory (REX.md-style content) — always present once set, regardless
+         * of sessionId, independent of the three memory layers (Session/Task/AgentContext). Read
+         * by both {@link TaskPlanner} and {@link CapabilityExecutor}. Typically the caller
+         * concatenates a user-scope and a project-scope file before passing it in; this builder
+         * doesn't read any files itself.
+         */
+        public Builder withProjectMemory(String content) {
+            this.projectMemory = content;
             return this;
         }
 
@@ -322,7 +480,7 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
-        /** Convenience: load plugins from file-system directories without constructing a marketplace manually. */
+        /** Convenience: load manifest-based plugins from file-system directories without constructing a marketplace manually. */
         public Builder withDirectory(String... dirs) {
             if (this.marketplace == null) {
                 this.marketplace = new SimpleMarketplace();
@@ -335,7 +493,78 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
-        /** Convenience: register one or more pre-built Tool objects directly as MCP_TOOL capabilities. */
+        /** Convenience: load manifest-less, directly-editable skills (skills/&lt;name&gt;/SKILL.md) without constructing a marketplace manually. */
+        public Builder withSkillsDirectory(String... dirs) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (String dir : dirs) {
+                mgr.addSkillsDirectory(dir);
+            }
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /**
+         * Convenience: load one or more already-resolved plugin directories — each directory
+         * itself carries the manifest, unlike {@link #withDirectory} which expects a parent
+         * containing many plugin subdirectories.
+         */
+        public Builder withPluginDirectory(String... dirs) {
+            if (this.marketplace == null) {
+                this.marketplace = new SimpleMarketplace();
+            }
+            DefaultPluginManager mgr = new DefaultPluginManager();
+            for (String dir : dirs) {
+                mgr.addPluginDirectory(dir);
+            }
+            this.marketplace.load(mgr);
+            return this;
+        }
+
+        /**
+         * Applies each scope's {@code enabled.yml} on top of whatever has been installed so far,
+         * lowest-priority layer first (a later layer's key wins — see {@code ScopeResolver}).
+         * {@code enabled.yml} keys are {@code <plugin-id>@<marketplace-name>}, but
+         * {@link Marketplace#enable}/{@link Marketplace#disable} only key on pluginId — regnexe
+         * doesn't namespace its registry by marketplace (a deliberate simplification: two plugins
+         * with the same id in different marketplaces are treated as the same plugin), so the
+         * {@code @marketplace} suffix is stripped here. A no-op if no marketplace has been
+         * populated yet (nothing to enable/disable). {@code enabledYmlByScope} entries with a
+         * null path are skipped.
+         */
+        public Builder withEnabledState(Map<Scope, java.nio.file.Path> enabledYmlByScope, List<Scope> priorityOrder) {
+            if (this.marketplace == null) {
+                return this;
+            }
+            EnabledStateLoader loader = new EnabledStateLoader();
+            ScopeResolver resolver = new ScopeResolver();
+            List<ScopedEnabledState> layers = new ArrayList<>();
+            for (Scope scope : priorityOrder) {
+                java.nio.file.Path path = enabledYmlByScope.get(scope);
+                if (path == null) continue;
+                layers.add(new ScopedEnabledState(scope, loader.load(path)));
+            }
+            Map<String, Boolean> resolved = resolver.resolve(layers);
+            resolved.forEach((globalId, isEnabled) -> {
+                String pluginId = globalId.contains("@") ? globalId.substring(0, globalId.lastIndexOf('@')) : globalId;
+                if (Boolean.TRUE.equals(isEnabled)) {
+                    this.marketplace.enable(pluginId);
+                } else {
+                    this.marketplace.disable(pluginId);
+                }
+            });
+            return this;
+        }
+
+        /**
+         * Convenience: register one or more pre-built Tool objects directly as MCP_TOOL
+         * capabilities. Their names are tracked as "base tools" (see
+         * {@code ContextBusKeys.BASE_TOOL_NAMES}) — every selected SKILL capability
+         * unconditionally gets access to them, regardless of the skill's own allowedTools
+         * declaration or whether the Planner separately selected them this round.
+         */
         public Builder withTool(Tool... tools) {
             if (this.marketplace == null) {
                 this.marketplace = new SimpleMarketplace();
@@ -343,6 +572,7 @@ public class RegnexeAgentBuilder {
             DefaultPluginManager mgr = new DefaultPluginManager();
             for (Tool tool : tools) {
                 mgr.registerTool(tool);
+                this.baseToolNames.add(tool.getName());
             }
             this.marketplace.load(mgr);
             return this;
@@ -402,18 +632,25 @@ public class RegnexeAgentBuilder {
                     new Reflector(),
                     resolvedProvider,
                     defaultModel,
+                    plannerModel,
+                    reflectorModel,
                     resolvedMarketplace,
                     taskStore != null ? taskStore : new InMemoryTaskStore(),
                     resultComposer != null ? resultComposer : new DefaultResultComposer(),
                     maxRounds,
-                    new TokenAggregatingEventListener(eventListener != null ? eventListener : AgentEventListener.NO_OP),
+                    new TokenAggregatingEventListener(resolveEventListener()),
                     sessionStorage != null ? sessionStorage : new InMemoryConversationStorage(),
                     sessionBufferSize,
+                    sessionCompactPeriod,
                     agentContext != null ? agentContext : FullContext.build(),
                     maxAgentIterations,
+                    maxConsecutiveToolFailures,
                     maxContextOutputChars,
                     verbose,
-                    sessionMemory
+                    sessionMemory,
+                    claudeCompatWorkspace,
+                    projectMemory,
+                    baseToolNames
             );
         }
     }

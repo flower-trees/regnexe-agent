@@ -24,10 +24,10 @@ import org.salt.regnexe.agent.core.TestApplication;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.Marketplace;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilityCandidate;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilitySearchResult;
@@ -53,7 +53,7 @@ import java.util.Set;
  * Implementing the interface is the only requirement — {@code withPluginMarket(yourMarketplace)}
  * plugs it into the agent with no other code changes.
  *
- * Prerequisites: Test 2 needs env var DASHSCOPE_API_KEY.
+ * Prerequisites: Test 2 needs env var DEEPSEEK_KEY.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -116,7 +116,7 @@ public class ExampleReadme06MarketplaceTest {
         Assert.assertEquals("weather-plugin", weatherPlugins.get(0).getPluginId());
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)        // any Marketplace implementation plugs in here
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

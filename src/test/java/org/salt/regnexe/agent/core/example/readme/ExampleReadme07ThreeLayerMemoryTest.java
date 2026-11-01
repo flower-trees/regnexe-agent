@@ -50,7 +50,7 @@ import java.util.UUID;
  *
  * Each is independently replaceable without touching the agent's main loop.
  *
- * Prerequisites: set env var DASHSCOPE_API_KEY before running.
+ * Prerequisites: set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -74,7 +74,7 @@ public class ExampleReadme07ThreeLayerMemoryTest {
         String sessionId = UUID.randomUUID().toString();
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withSessionStorage(sessionStorage)   // layer 1: cross-task session history
                 .withEventListener(new ConsoleEventListener())
@@ -87,8 +87,7 @@ public class ExampleReadme07ThreeLayerMemoryTest {
         AgentResult result1 = agent.execute(first);
         Assert.assertEquals(TaskStatus.FINISHED, result1.getStatus());
 
-        long longSessionId = (long) sessionId.hashCode();
-        List<HistoryInfos> stored = sessionStorage.loadAll(0L, 0L, longSessionId);
+        List<HistoryInfos> stored = sessionStorage.loadAll("0", "0", sessionId);
         Assert.assertFalse("Session history should be stored after the first execute()", stored.isEmpty());
 
         TaskRequest second = new TaskRequest();
@@ -105,7 +104,7 @@ public class ExampleReadme07ThreeLayerMemoryTest {
         InMemoryTaskStore taskStore = new InMemoryTaskStore();
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withTaskStore(taskStore)   // layer 2: per-round execution ledger for one task
                 .withEventListener(new ConsoleEventListener())
@@ -131,7 +130,7 @@ public class ExampleReadme07ThreeLayerMemoryTest {
     @Test
     public void agentContextLayerShouldAcceptSlidingWindowStrategy() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 // layer 3: how much history one Search->Plan->Execute->Reflect round's
                 // internal tool-calling loop carries. Swap FullContext (default) for a

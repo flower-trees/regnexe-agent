@@ -30,7 +30,7 @@ import java.util.Map;
  * Use {@code type} to filter or route events.
  */
 @Value
-@Builder
+@Builder(toBuilder = true)
 public class AgentEvent {
 
     String taskId;
@@ -39,6 +39,18 @@ public class AgentEvent {
     String text;
     AgentTokenUsageEvent tokenUsage;
     long timestamp;
+    /**
+     * The call this event belongs to: the event that opens a call (AGENT_STARTED, *_STARTED,
+     * *_LLM_RESPONDED, TOOL_CALLED) carries a fresh id, events that complete or annotate it
+     * (*_COMPLETED, LLM_OUTPUT, token usage, TOOL_RESULT) carry the same one. See {@link SpanIds}.
+     */
+    String spanId;
+    /** The enclosing call; meaningful on the event that opens a call, null for a task's root. */
+    String parentSpanId;
+
+    public AgentEvent inSpan(String spanId, String parentSpanId) {
+        return toBuilder().spanId(spanId).parentSpanId(parentSpanId).build();
+    }
 
     public static AgentEvent of(String taskId, int round, EventType type, String text) {
         return AgentEvent.builder()

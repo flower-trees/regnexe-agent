@@ -20,13 +20,13 @@ import org.junit.runner.RunWith;
 import org.salt.regnexe.agent.core.RegnexeAgent;
 import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
 import org.salt.regnexe.agent.core.TestApplication;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.salt.regnexe.agent.core.task.state.TaskRequest;
 import org.salt.jlangchain.core.history.HistoryInfos;
@@ -59,7 +59,7 @@ import java.util.UUID;
  *
  * Prerequisites
  * -------------
- * Set env var DASHSCOPE_API_KEY before running.
+ * Set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -109,7 +109,7 @@ public class Example06SessionMemoryTest {
         // ── Agent with shared session storage ─────────────────────────────────
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withSessionStorage(sessionStorage)
                 .withEventListener(new ConsoleEventListener())
@@ -133,9 +133,7 @@ public class Example06SessionMemoryTest {
         Assert.assertEquals(TaskStatus.FINISHED, result1.getStatus());
         Assert.assertNotNull(result1.getFinalText());
 
-        // Verify session storage has an entry (sessionId → Long hashCode)
-        long longSessionId = (long) sessionId.hashCode();
-        List<HistoryInfos> stored = sessionStorage.loadAll(0L, 0L, longSessionId);
+        List<HistoryInfos> stored = sessionStorage.loadAll("0", "0", sessionId);
         Assert.assertFalse("Session history should be stored after execute 1", stored.isEmpty());
 
         System.out.println("Session history entries after execute 1: " + stored.size());
@@ -161,7 +159,7 @@ public class Example06SessionMemoryTest {
         Assert.assertFalse(result2.getFinalText().isBlank());
 
         // Both executions should have contributed to the session
-        List<HistoryInfos> storedAfter2 = sessionStorage.loadAll(0L, 0L, longSessionId);
+        List<HistoryInfos> storedAfter2 = sessionStorage.loadAll("0", "0", sessionId);
         System.out.println("Session history entries after execute 2: " + storedAfter2.size());
         Assert.assertTrue("Session history should grow after execute 2",
                 storedAfter2.size() >= stored.size());

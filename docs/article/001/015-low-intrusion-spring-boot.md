@@ -21,7 +21,7 @@ private RegnexeAgentBuilder regnexeAgentBuilder;
 
 ```java
 RegnexeAgent agent = regnexeAgentBuilder
-        .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+        .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
         .withPlugin(new WeatherPlugin())
         .withEventListener(new ConsoleEventListener())
         .withMaxRounds(3)

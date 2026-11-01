@@ -20,13 +20,13 @@ import org.junit.runner.RunWith;
 import org.salt.regnexe.agent.core.RegnexeAgent;
 import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
 import org.salt.regnexe.agent.core.TestApplication;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
@@ -47,7 +47,7 @@ import java.util.List;
  *
  * Prerequisites
  * -------------
- * Set env var DASHSCOPE_API_KEY before running.
+ * Set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -135,7 +135,7 @@ public class Example03TravelPlannerTest {
         // ── Agent ────────────────────────────────────────────────────────────
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPluginMarket(marketplace)
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

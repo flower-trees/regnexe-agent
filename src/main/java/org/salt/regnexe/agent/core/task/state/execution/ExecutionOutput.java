@@ -35,7 +35,12 @@ public class ExecutionOutput {
      */
     private String partialContext;
 
-    private List<ToolExecutionRecord> toolExecutions;
-
     private ExecutionStatus status;
+
+    /**
+     * This round's own tool calls, labeled (round/type/name/arguments/observation) — scoped to
+     * just this round, unlike TaskExecutionState.priorSteps (the cross-round shared history).
+     * Read by Reflector's plan-vs-actual cross-check and the live event log.
+     */
+    private List<ToolExecutionRecord> toolExecutions;
 }

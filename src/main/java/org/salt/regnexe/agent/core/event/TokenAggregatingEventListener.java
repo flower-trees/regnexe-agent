@@ -54,12 +54,18 @@ public class TokenAggregatingEventListener implements AgentEventListener {
     @Override
     public void onEvent(AgentEvent event) {
         switch (event.getType()) {
+            case AGENT_STARTED -> {
+                // Elapsed time is measured from here, not from the first token event: that one
+                // arrives only after the first LLM call has already finished.
+                taskStartMs.put(event.getTaskId() != null ? event.getTaskId() : "", event.getTimestamp());
+                delegate.dispatch(event);
+            }
             case TOKEN_USAGE, CAPABILITY_TOKEN_USAGE -> {
                 accumulate(event);
                 delegate.dispatch(event);
             }
             case AGENT_COMPLETED -> {
-                emitSummary(event.getTaskId(), event.getRound(), event.getTimestamp());
+                emitSummary(event);
                 delegate.dispatch(event);
             }
             default -> delegate.dispatch(event);
@@ -104,7 +110,10 @@ public class TokenAggregatingEventListener implements AgentEventListener {
         taskStartMs.computeIfAbsent(parentTaskId, k -> event.getTimestamp());
     }
 
-    private void emitSummary(String taskId, int round, long completedAt) {
+    private void emitSummary(AgentEvent completed) {
+        String taskId = completed.getTaskId();
+        int round = completed.getRound();
+        long completedAt = completed.getTimestamp();
         String key = taskId != null ? taskId : "";
         Map<String, AiTokenUsage> modelMap = accumulator.remove(key);
         toolCallsTracker.remove(key);
@@ -123,6 +132,7 @@ public class TokenAggregatingEventListener implements AgentEventListener {
 
         delegate.dispatch(AgentEvent.ofTaskTokenSummary(
                 taskId, round, total, modelMap, elapsedMs, totalLlmMs,
-                durations != null ? durations : Map.of()));
+                durations != null ? durations : Map.of())
+                .inSpan(completed.getSpanId(), null));
     }
 }

@@ -16,6 +16,7 @@ package org.salt.regnexe.agent.core.llm;
 
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.llm.aliyun.ChatAliyun;
+import org.salt.jlangchain.core.llm.custom.ChatCustom;
 import org.salt.jlangchain.core.llm.deepseek.ChatDeepseek;
 import org.salt.jlangchain.core.llm.doubao.ChatDoubao;
 import org.salt.jlangchain.core.llm.hunyuan.ChatHunyuan;
@@ -46,6 +47,12 @@ import org.salt.jlangchain.core.llm.zhipu.ChatZhipu;
  *   ernie-                    → qianfan
  *   step-                     → stepfun
  *   glm-                      → zhipu
+ *
+ * "custom" (any OpenAI-Chat-Completions-compatible endpoint not covered above — OpenRouter,
+ * Together, Groq, a self-hosted server, a corporate gateway) has no prefix rule and must be
+ * routed explicitly via {@code vendor: custom}: there is no model-name pattern that reliably
+ * signals "this is some arbitrary compatible endpoint", so guessing it from the model string
+ * would risk misrouting other vendors' models that happen to contain a similar substring.
  */
 public class DefaultModelProvider implements ModelProvider {
 
@@ -55,66 +62,72 @@ public class DefaultModelProvider implements ModelProvider {
             throw new IllegalArgumentException("ModelSpec and model must not be null");
         }
         if (spec.getVendor() != null) {
-            return byVendor(spec.getVendor(), spec.getModel());
+            return byVendor(spec.getVendor(), spec.getModel(), spec.getModelKwargs());
         }
-        return byPrefix(spec.getModel());
+        return byPrefix(spec.getModel(), spec.getModelKwargs());
     }
 
-    private BaseChatModel byVendor(String vendor, String model) {
+    // modelKwargs was previously silently dropped here — every branch below built the chat model
+    // from vendor+model only, so ModelSpec.of(vendor, model, kwargs) (the three-arg factory, whose
+    // own javadoc example shows a "thinking" kwarg) had no effect at all. Each vendor's builder
+    // already supports .modelKwargs(...) (it flows through BaseChatModel -> AiChatInput.extraParams
+    // -> the request body's top-level fields); this was just never wired to call it.
+    private BaseChatModel byVendor(String vendor, String model, java.util.Map<String, Object> kwargs) {
         return switch (vendor.toLowerCase()) {
-            case "aliyun"   -> ChatAliyun.builder().model(model).build();
-            case "deepseek" -> ChatDeepseek.builder().model(model).build();
-            case "doubao"   -> ChatDoubao.builder().model(model).build();
-            case "hunyuan"  -> ChatHunyuan.builder().model(model).build();
-            case "lingyi"   -> ChatLingyi.builder().model(model).build();
-            case "minimax"  -> ChatMinimax.builder().model(model).build();
-            case "moonshot" -> ChatMoonshot.builder().model(model).build();
-            case "ollama"   -> ChatOllama.builder().model(model).build();
-            case "openai"   -> ChatOpenAI.builder().model(model).build();
-            case "qianfan"  -> ChatQianfan.builder().model(model).build();
-            case "stepfun"  -> ChatStepfun.builder().model(model).build();
-            case "zhipu"    -> ChatZhipu.builder().model(model).build();
+            case "aliyun"   -> ChatAliyun.builder().model(model).modelKwargs(kwargs).build();
+            case "custom"   -> ChatCustom.builder().model(model).modelKwargs(kwargs).build();
+            case "deepseek" -> ChatDeepseek.builder().model(model).modelKwargs(kwargs).build();
+            case "doubao"   -> ChatDoubao.builder().model(model).modelKwargs(kwargs).build();
+            case "hunyuan"  -> ChatHunyuan.builder().model(model).modelKwargs(kwargs).build();
+            case "lingyi"   -> ChatLingyi.builder().model(model).modelKwargs(kwargs).build();
+            case "minimax"  -> ChatMinimax.builder().model(model).modelKwargs(kwargs).build();
+            case "moonshot" -> ChatMoonshot.builder().model(model).modelKwargs(kwargs).build();
+            case "ollama"   -> ChatOllama.builder().model(model).modelKwargs(kwargs).build();
+            case "openai"   -> ChatOpenAI.builder().model(model).modelKwargs(kwargs).build();
+            case "qianfan"  -> ChatQianfan.builder().model(model).modelKwargs(kwargs).build();
+            case "stepfun"  -> ChatStepfun.builder().model(model).modelKwargs(kwargs).build();
+            case "zhipu"    -> ChatZhipu.builder().model(model).modelKwargs(kwargs).build();
             default -> throw new IllegalArgumentException("Unknown vendor: " + vendor);
         };
     }
 
-    private BaseChatModel byPrefix(String model) {
+    private BaseChatModel byPrefix(String model, java.util.Map<String, Object> kwargs) {
         String m = model.toLowerCase();
         if (m.startsWith("qwen-") || m.startsWith("qwq-")) {
-            return ChatAliyun.builder().model(model).build();
+            return ChatAliyun.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("deepseek-")) {
-            return ChatDeepseek.builder().model(model).build();
+            return ChatDeepseek.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("ep-")) {
-            return ChatDoubao.builder().model(model).build();
+            return ChatDoubao.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("hunyuan-")) {
-            return ChatHunyuan.builder().model(model).build();
+            return ChatHunyuan.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("yi-")) {
-            return ChatLingyi.builder().model(model).build();
+            return ChatLingyi.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("minimax-") || model.startsWith("MiniMax-")) {
-            return ChatMinimax.builder().model(model).build();
+            return ChatMinimax.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("moonshot-")) {
-            return ChatMoonshot.builder().model(model).build();
+            return ChatMoonshot.builder().model(model).modelKwargs(kwargs).build();
         }
         if (model.contains(":")) {
-            return ChatOllama.builder().model(model).build();
+            return ChatOllama.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("gpt-") || m.startsWith("o1-") || m.startsWith("o3-") || m.startsWith("o4-")) {
-            return ChatOpenAI.builder().model(model).build();
+            return ChatOpenAI.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("ernie-")) {
-            return ChatQianfan.builder().model(model).build();
+            return ChatQianfan.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("step-")) {
-            return ChatStepfun.builder().model(model).build();
+            return ChatStepfun.builder().model(model).modelKwargs(kwargs).build();
         }
         if (m.startsWith("glm-")) {
-            return ChatZhipu.builder().model(model).build();
+            return ChatZhipu.builder().model(model).modelKwargs(kwargs).build();
         }
         throw new IllegalArgumentException("No vendor matched for model: " + model);
     }

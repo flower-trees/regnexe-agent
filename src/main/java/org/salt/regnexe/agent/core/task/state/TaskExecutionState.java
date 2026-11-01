@@ -15,6 +15,7 @@
 package org.salt.regnexe.agent.core.task.state;
 
 import lombok.Data;
+import org.salt.jlangchain.core.agent.memory.AgentStep;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilitySearchResult;
 
@@ -56,6 +57,25 @@ public class TaskExecutionState {
     private List<RoundRecord> rounds;
 
     /**
+     * The shared AgentTaskContext's completed steps, carried across rounds so Execute's own
+     * conversation history (not a hand-rendered text summary) is what continues each round —
+     * see docs/design/11-round-context-sharing-design.md. CapabilityExecutor replays these into a
+     * freshly created AgentTaskContext at the start of each round (via addStep), then persists
+     * whatever remains back here (via getCompletedSteps) once the round finishes. Compaction of
+     * older steps into {@link #priorStepsSummary} happens inside that AgentTaskContext itself
+     * (e.g. SlidingWindowContext) — regnexe only stores and replays, it never compacts.
+     */
+    private List<AgentStep> priorSteps;
+
+    /**
+     * The shared AgentTaskContext's compacted summary of steps already dropped out of
+     * {@link #priorSteps} (see {@code AgentTaskContext#getEarlyStepsSummary()}). Restored into
+     * the fresh context each round via {@code restoreSummary()} so a compacted summary isn't
+     * regenerated from scratch every round.
+     */
+    private String priorStepsSummary;
+
+    /**
      * Last top-level tool result produced by the current execution.
      * Used when execution delegates to a skill/sub-agent and the raw tool result
      * should be reflected/composed without a second LLM rewrite.
@@ -66,6 +86,13 @@ public class TaskExecutionState {
      * Reference to the Context in ContextManager; not embedded inline
      */
     private String contextId;
+
+    /**
+     * The executor's self-maintained task checklist (the {@code write_todos} tool) — optional,
+     * model-driven, replaced wholesale on every call. Persists across rounds like everything else
+     * here, so a {@code /resume} can show what was still pending.
+     */
+    private List<TodoItem> todos;
 
     private Map<String, Object> metadata;
 }

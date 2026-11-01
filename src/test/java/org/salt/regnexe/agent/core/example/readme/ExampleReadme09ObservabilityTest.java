@@ -36,7 +36,7 @@ import org.springframework.test.context.junit4.SpringRunner;
  * and its token/LLM filtering flags, plus {@code Slf4jEventListener} as the production swap-in
  * that routes the same events through SLF4J instead of stdout.
  *
- * Prerequisites: set env var DASHSCOPE_API_KEY before running.
+ * Prerequisites: set env var DEEPSEEK_KEY before running.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -48,7 +48,7 @@ public class ExampleReadme09ObservabilityTest {
     @Test
     public void consoleEventListenerShouldFinish() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -72,7 +72,7 @@ public class ExampleReadme09ObservabilityTest {
         // showTokenEvents=true, showLlmEvents=true — also prints TOKEN_USAGE / CAPABILITY_TOKEN_USAGE /
         // TASK_TOKEN_SUMMARY and the raw *_LLM_RESPONDED text that the default constructor suppresses.
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withEventListener(new ConsoleEventListener(true, true))
                 .withMaxRounds(3)
@@ -110,7 +110,7 @@ public class ExampleReadme09ObservabilityTest {
     @Test
     public void slf4jEventListenerShouldFinish() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withEventListener(new Slf4jEventListener())
                 .withMaxRounds(3)

@@ -55,7 +55,7 @@ SkillConfig travelAdvisor = SkillConfig.builder()
         .build();
 
 RegnexeAgent agent = regnexeAgentBuilder
-        .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+        .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
         .withTool(weatherTool)        // Skill 借用的工具必须已经在市场里
         .withSkill(travelAdvisor)
         .withEventListener(new ConsoleEventListener())

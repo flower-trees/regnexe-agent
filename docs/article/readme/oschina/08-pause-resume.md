@@ -32,7 +32,7 @@ Tool slowWeatherTool = Tool.builder()
         .build();
 
 RegnexeAgent agent = regnexeAgentBuilder
-        .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+        .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
         .withTool(slowWeatherTool)
         .withTaskStore(new InMemoryTaskStore())   // 暂停/恢复必须有持久化状态，这一行不能省
         .withEventListener(new ConsoleEventListener())

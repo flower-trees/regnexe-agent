@@ -15,7 +15,7 @@
 package org.salt.regnexe.agent.core.task.state.capability;
 
 import lombok.Data;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 
 import java.util.List;
 import java.util.Map;

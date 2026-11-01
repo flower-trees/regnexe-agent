@@ -78,7 +78,7 @@ Tool airQualityTool = Tool.builder()
 
 ```java
 McpAgentExecutor agent = McpAgentExecutor.builder(chainActor)
-    .llm(ChatAliyun.builder().model("qwen3.6-plus").temperature(0f).build())
+    .llm(ChatDeepseek.builder().model("deepseek-v4-flash").temperature(0f).build())
     .tools(weatherTool, airQualityTool)
     .systemPrompt("你是一个户外运动助手，可以调用天气和空气质量工具后回答用户问题。")
     .maxIterations(5)
@@ -231,7 +231,7 @@ Tool airQualityTool = Tool.builder()
 
 ```java
 AgentResult result = regnexeAgentBuilder
-    .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+    .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
     .withTool(weatherTool, airQualityTool)
     .withEventListener(new ConsoleEventListener())
     .build()

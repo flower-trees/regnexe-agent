@@ -19,18 +19,21 @@ import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
-import org.salt.regnexe.agent.core.common.util.ExecutionRecordFormatter;
+import org.salt.regnexe.agent.core.common.util.RoundRecords;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
+import org.salt.regnexe.agent.core.event.SpanIds;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilityCandidate;
+import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
-import org.salt.regnexe.agent.core.task.state.plan.ResultStrategy;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
@@ -60,13 +63,20 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             and any prior execution history, then produce a concise execution plan.
 
             Rules:
+            - ID FIDELITY: every id in selectedCapabilityIds MUST be copied character-for-character \
+              from the "Available capabilities" list below. Never invent, guess, abbreviate, or use a \
+              bare number/index as an id — if you are not certain an id is listed there, do not include it.
             - Select only capabilities that are genuinely relevant to the goal.
             - The narrative should be clear, actionable instructions for the executor.
+            - NARRATIVE LENGTH: keep narrative short — a few sentences covering sequence/strategy only \
+              (what to do, and in what order). Do NOT restate capability input data (that belongs in \
+              capabilityInputDescriptions) or the final-answer checklist (that belongs in \
+              finalAnswerRequirements).
             - CRITICAL: every capability name you mention in the narrative MUST also appear in selectedCapabilityIds.
-            - TOOL DEPENDENCIES: If a selected SKILL or SUB_AGENT lists allowedTools, you MUST also include each \
-              allowed tool id in selectedCapabilityIds. These tools are inherited dependencies for that capability; \
-              include them so the executor can make them available, but do not present them as separate top-level \
-              user tasks unless the user explicitly asked to call them directly.
+            - CAPABILITY DEPENDENCIES: If a selected SKILL or SUB_AGENT lists allowedTools, you MUST also include \
+              each allowed capability id in selectedCapabilityIds. These are inherited dependencies for that \
+              capability; include them so the executor can make them available, but do not present them as \
+              separate top-level user tasks unless the user explicitly asked to call them directly.
             - For each selected capability, write a focused input description in capabilityInputDescriptions: \
               describe what context to pass when invoking it (e.g. user goal, specific data, or the output \
               of a preceding capability). Be specific — the executor uses these descriptions to construct \
@@ -81,19 +91,20 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             - UNIQUE IDs: selectedCapabilityIds must contain each capability ID at most once. \
               If the goal involves conditional retries (e.g. "if QC fails, retry"), list the capability \
               once — the executor agent will call it again as needed based on the narrative.
-            - RESUME CONTEXT: When previous execution records are provided, use them as completed evidence. \
-              If those records already contain enough information to satisfy the goal and supplement, you may \
-              set selectedCapabilityIds to an empty array and instruct the executor to answer from the existing \
-              records without calling tools again.
-            - RESULT STRATEGY: Choose resultStrategy based on the user's deliverable semantics:
-              * RETURN_LAST: use only when the final selected capability is expected to produce the complete \
-                user-facing answer and earlier capability results are merely intermediate inputs.
-              * SYNTHESIZE: use when the user asks for multiple deliverables, multiple independent tasks, \
-                comparisons, a combined report, or when outputs from more than one capability must appear \
-                in the final answer.
             - FINAL ANSWER REQUIREMENTS: list the concrete user-facing items the executor's final answer \
-              must include. For SYNTHESIZE, include every required deliverable. For RETURN_LAST, include \
-              the single complete deliverable expected from the final capability.
+              must include — every deliverable the round is expected to produce.
+            - ITERATIONS HINT: Estimate how many executor iterations this plan will need and set \
+              iterationsHint accordingly. Use these per-operation costs as a guide:
+              * Each file read (read_file, list_files, search_files): ~2 iterations
+              * Each file write or edit (write_file, edit_file, with confirmation): ~3 iterations
+              * Each bash execution (with possible confirmation): ~2 iterations
+              * Each sub-agent or skill call: ~5 iterations
+              Sum the costs for all planned operations, then add a 25%% buffer. \
+              If the total is <= the default (%s), omit the field or set it to null — but if this \
+              round's plan is simpler than that default suggests, set iterationsHint to your own \
+              lower estimate anyway: it also tightens the budget, not just raises it, so a small \
+              plan gets a small ceiling instead of the full default room to keep going after the \
+              goal is already met.
             - Output ONLY a valid JSON object — no markdown fences, no extra text.
 
             Output format:
@@ -104,13 +115,19 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 "<id1>": "<what to pass as input to this capability>",
                 "<id2>": "<what to pass; may reference the output of id1>"
               },
-              "resultStrategy": "<use exactly RETURN_LAST or SYNTHESIZE>",
               "finalAnswerRequirements": ["<required item 1>", "<required item 2>"],
-              "reasoning": "<why you chose these capabilities>"
+              "iterationsHint": <integer or null>
             }
             """;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final int MAX_PLAN_RETRIES = 2;
+    private static final int MAX_SAFE_ITERATIONS = 200;
+    private static final String PARSE_ERROR_CORRECTION =
+            "[PARSE ERROR] Your previous response was not valid JSON. " +
+            "Do NOT output XML, markdown, tool-call syntax, or any other format. " +
+            "Output ONLY a plain JSON object matching the required schema. No ```json fences.";
 
     @Override
     public Object process(Object input) {
@@ -122,42 +139,165 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         }
         ChainActor chainActor = bus.getTransmit(ContextBusKeys.CHAIN_ACTOR);
         ModelProvider llmProvider = bus.getTransmit(ContextBusKeys.LLM_PROVIDER);
-        ModelSpec modelSpec = bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
+        // Falls back to DEFAULT_MODEL when no Planner-specific override is configured —
+        // see ContextBusKeys.PLANNER_MODEL's javadoc for why a stronger model here specifically
+        // (vs. Execute) is a reasonable place to spend more.
+        ModelSpec plannerModelSpec = bus.getTransmit(ContextBusKeys.PLANNER_MODEL);
+        ModelSpec modelSpec = plannerModelSpec != null
+                ? plannerModelSpec : bus.getTransmit(ContextBusKeys.DEFAULT_MODEL);
         AgentEventListener listener = bus.getTransmit(ContextBusKeys.EVENT_LISTENER);
         List<CapabilityCandidate> candidates = bus.getTransmit(ContextBusKeys.CANDIDATES);
         List<HistoryInfos> sessionHistory = bus.getTransmit(ContextBusKeys.SESSION_HISTORY);
         TaskStore taskStore = bus.getTransmit(ContextBusKeys.TASK_STORE);
-        boolean resumeMode = Boolean.TRUE.equals(bus.getTransmit(ContextBusKeys.RESUME_MODE));
+        String projectMemory = bus.getTransmit(ContextBusKeys.PROJECT_MEMORY);
+        // The untouched original config value — NOT MAX_AGENT_ITERATIONS itself, which earlier
+        // rounds of this same task may already have overridden (see the iterationsHint block
+        // below and MAX_AGENT_ITERATIONS_DEFAULT's javadoc). Falls back to whatever
+        // MAX_AGENT_ITERATIONS currently holds for callers that never set the DEFAULT key
+        // (e.g. an older embedding of regnexe-agent), then to a hardcoded 20 if neither is set.
+        Integer defaultIterationsBoxed = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS_DEFAULT);
+        if (defaultIterationsBoxed == null) {
+            defaultIterationsBoxed = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
+        }
+        int defaultIterations = defaultIterationsBoxed != null ? defaultIterationsBoxed : 20;
 
-        BaseChatModel llm = llmProvider.provide(modelSpec);
         String taskId = state.getTaskId();
         int round = state.getCurrentRound();
-        FlowInstance flow = buildFlow(chainActor, llm,
-                text -> listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text)));
 
         String candidateNames = candidates == null ? "" : candidates.stream()
                 .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
+        String phaseSpan = SpanIds.next();
+        LoopSpans spans = new LoopSpans(() -> phaseSpan);
         listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
-                "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames));
+                "Goal: " + state.getRequest().getGoal() + " | Candidates: " + candidateNames)
+                .inSpan(phaseSpan, bus.getTransmit(ContextBusKeys.RUN_SPAN_ID)));
 
-        ChatPromptValue prompt = buildChatPrompt(state, candidates, sessionHistory, resumeMode);
-        ChatGeneration result = chainActor.invoke(flow, prompt);
+        boolean hasCandidates = candidates != null && !candidates.isEmpty();
+        // Session history is normally only sent on round 1 — from round 2 on, this round's own
+        // "Progress so far" carries the same signal more cheaply. But if round 1 crashes before
+        // Execute ever runs, round 2 gets neither the history nor real task progress, and can lose
+        // track of what a short follow-up goal (e.g. "continue") even refers to. So keep resending
+        // history every round until the task has at least one round that actually completed.
+        boolean isFirstRound = round == 1;
+        boolean hasHistory = sessionHistory != null && !sessionHistory.isEmpty()
+                && (isFirstRound || noRoundSucceededYet(state));
 
-        PlanOutput plan = parsePlan(result.getText());
-        normalizePlan(plan);
-        expandSelectedAllowedTools(plan, candidates);
+        PlanOutput plan;
+        if (!hasCandidates) {
+            // No capabilities — skip the LLM planning call entirely.
+            // The executor will answer the goal directly via its own LLM call.
+            plan = new PlanOutput();
+            plan.setSelectedCapabilityIds(List.of());
+            plan.setNarrative("No tools available. Provide a direct answer to the goal.");
+            plan.setFinalAnswerRequirements(List.of());
+            normalizePlan(plan);
+        } else {
+            // withJsonMode(): Plan output is parsed as structured JSON (PlanOutput), so ask the
+            // vendor to constrain generation to valid JSON syntax where supported. This does NOT
+            // affect Execute — CapabilityExecutor provides its own llm instance for tool-calling.
+            BaseChatModel llm = llmProvider.provide(modelSpec).withJsonMode();
+            FlowInstance flow = buildFlow(chainActor, llm,
+                    text -> listener.dispatch(spans.llmStarted(
+                            AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text))));
+
+            ChatPromptValue basePrompt = buildChatPrompt(state, candidates, hasHistory ? sessionHistory : null, projectMemory, defaultIterations);
+            List<BaseMessage> messages = new ArrayList<>(basePrompt.getMessages());
+            plan = null;
+            String lastRaw = null;
+            for (int attempt = 0; attempt <= MAX_PLAN_RETRIES; attempt++) {
+                // A call failure (network/HTTP) is a different failure mode from a parse failure
+                // below, but reuses the same retry budget — worth one more attempt before falling
+                // through to recoverPlan()'s deterministic, LLM-free fallback.
+                String gen;
+                try {
+                    long callStartedAt = System.currentTimeMillis();
+                    ChatGeneration callResult = chainActor.invoke(flow,
+                            ChatPromptValue.builder().messages(messages).build());
+                    LlmCallReporter.report(listener, spans, taskId, round, "plan", callResult, callStartedAt);
+                    gen = callResult.getText();
+                } catch (Exception e) {
+                    log.warn("Round {}: plan call failed on attempt {}/{}: {}",
+                            round, attempt + 1, MAX_PLAN_RETRIES + 1, e.getMessage());
+                    continue;
+                }
+                lastRaw = gen;
+                PlanOutput parsed = tryParsePlan(lastRaw);
+                List<String> invalidIds = invalidCapabilityIds(parsed, candidates);
+                if (parsed != null && invalidIds.isEmpty()) {
+                    plan = parsed;
+                    break;
+                }
+                if (attempt < MAX_PLAN_RETRIES) {
+                    messages = new ArrayList<>(messages);
+                    messages.add(BaseMessage.fromMessage(MessageType.AI.getCode(), lastRaw));
+                    if (parsed == null) {
+                        log.warn("Round {}: plan parse failed on attempt {}/{}, retrying",
+                                round, attempt + 1, MAX_PLAN_RETRIES);
+                        messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), PARSE_ERROR_CORRECTION));
+                    } else {
+                        log.warn("Round {}: plan selected unknown capability id(s) {} on attempt {}/{}, retrying",
+                                round, invalidIds, attempt + 1, MAX_PLAN_RETRIES);
+                        messages.add(BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), invalidIdCorrection(invalidIds)));
+                    }
+                } else if (parsed != null) {
+                    // Out of retries but the JSON itself is fine — keep the plan and drop just the
+                    // ids that still don't exist, rather than discarding an otherwise-usable plan
+                    // via recoverPlan() (which would also throw away a correct narrative/valid ids).
+                    log.warn("Round {}: plan still selects unknown capability id(s) {} after {} retries, dropping them",
+                            round, invalidIds, MAX_PLAN_RETRIES);
+                    List<String> cleaned = new ArrayList<>(parsed.getSelectedCapabilityIds());
+                    cleaned.removeAll(invalidIds);
+                    parsed.setSelectedCapabilityIds(cleaned);
+                    plan = parsed;
+                }
+            }
+            if (plan == null) {
+                log.warn("Round {}: plan parse failed after {} retries, using recovery plan", round, MAX_PLAN_RETRIES);
+                plan = recoverPlan(state, candidates, lastRaw);
+            }
+            normalizePlan(plan);
+            expandSelectedAllowedTools(plan, candidates);
+        }
+
+        // Append session history to narrative so the executor LLM sees conversation
+        // context directly, regardless of whether the planner LLM was called.
+        if (hasHistory) {
+            plan.setNarrative(plan.getNarrative() + formatHistoryForNarrative(sessionHistory));
+        }
 
         bus.putTransmit(ContextBusKeys.PLAN_NARRATIVE, plan.getNarrative());
         bus.putTransmit(ContextBusKeys.SELECTED_CAPS, plan.getSelectedCapabilityIds());
         bus.putTransmit(ContextBusKeys.CAPABILITY_INPUT_DESCS, plan.getCapabilityInputDescriptions());
 
-        currentRound(state).setPlan(plan);
+        // Set this round's maxAgentIterations from the plan's own estimate, in either direction —
+        // not just upward. A hint below the default should tighten the ceiling too, otherwise a
+        // simple round keeps the full default room even after its goal is met and the executor
+        // wanders into unnecessary extra tool calls. Always computed relative to defaultIterations
+        // (the untouched config value), not whatever MAX_AGENT_ITERATIONS currently holds, since
+        // that may already carry a previous round's override. A flat 30% margin absorbs retries
+        // and extra confirmations the estimate didn't account for.
+        if (plan.getIterationsHint() != null && plan.getIterationsHint() > 0) {
+            int hint = Math.min(plan.getIterationsHint(), MAX_SAFE_ITERATIONS);
+            int hintWithMargin = (int) Math.ceil(hint * 1.3);
+            Integer current = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
+            if (current == null || hintWithMargin != current) {
+                bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS, hintWithMargin);
+                log.debug("Round {}: iterationsHint={} (+30% margin={}) applied (was {}, default {})",
+                        round, hint, hintWithMargin, current, defaultIterations);
+            }
+        } else {
+            // No hint this round (Planner judged the default sufficient, or this is the
+            // no-candidates direct-answer branch) — reset to the real baseline instead of
+            // silently keeping whatever a previous round's override left behind.
+            bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS, defaultIterations);
+        }
+
+        RoundRecords.current(state).setPlan(plan);
         state.setUpdatedAt(System.currentTimeMillis());
 
         listener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(), EventType.PLAN_COMPLETED,
                 "Selected: " + plan.getSelectedCapabilityIds()
-                + " | Strategy: " + plan.getResultStrategy()
-                + " | " + plan.getNarrative()));
+                + " | " + plan.getNarrative()).inSpan(phaseSpan, null));
         log.debug("Round {}: plan produced, selected caps: {}",
                 state.getCurrentRound(), plan.getSelectedCapabilityIds());
 
@@ -179,17 +319,31 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
     private ChatPromptValue buildChatPrompt(TaskExecutionState state,
                                             List<CapabilityCandidate> candidates,
                                             List<HistoryInfos> sessionHistory,
-                                            boolean resumeMode) {
+                                            String projectMemory,
+                                            int defaultIterations) {
         List<BaseMessage> messages = new ArrayList<>();
 
-        // ── System message: SYSTEM_PROMPT + SUMMARY + capabilities ───────────
-        StringBuilder systemSb = new StringBuilder(SYSTEM_PROMPT);
+        // ── System message: SYSTEM_PROMPT + PROJECT_MEMORY + SUMMARY + capabilities ──
+        // .formatted() resolves both the real %s (the actual configured default, not a stale
+        // hardcoded number) and the escaped %% ("25%% buffer" -> "25% buffer" in what the LLM
+        // actually reads).
+        StringBuilder systemSb = new StringBuilder(SYSTEM_PROMPT.formatted(defaultIterations));
 
+        // Long-term project memory (REX.md) — always present once configured, independent of
+        // sessionId/history.
+        if (projectMemory != null && !projectMemory.isBlank()) {
+            systemSb.append("\n\n---\n\nProject memory:\n").append(projectMemory);
+        }
+
+        // Labeled explicitly here rather than trusting the content to already say what it is —
+        // PeriodicConversationSummaryMemoryStorer happens to prefix its own summaries with
+        // "Conversation summary: ", but that's a convention of one ConversationMemory
+        // implementation, not a guarantee of HistoryInfos.Type.SUMMARY itself.
         if (sessionHistory != null) {
             for (HistoryInfos h : sessionHistory) {
                 if (h.getType() == HistoryInfos.Type.SUMMARY) {
                     for (BaseMessage msg : h.getMessages()) {
-                        systemSb.append("\n\n").append(msg.getContent());
+                        systemSb.append("\n\nSession summary:\n").append(msg.getContent());
                     }
                 }
             }
@@ -230,20 +384,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         StringBuilder humanSb = new StringBuilder();
         humanSb.append("Goal: ").append(state.getRequest().getGoal());
 
-        String supplement = state.getRequest().getSupplementInput();
-        if (supplement != null && !supplement.isBlank()) {
-            humanSb.append("\n\n== User supplement ==\n").append(supplement);
-        }
-
-        if (resumeMode) {
-            String previousRecords = ExecutionRecordFormatter.formatPreviousExecutionRecords(state);
-            if (!previousRecords.isBlank()) {
-                humanSb.append("\n\n== Previous execution records before resume ==\n")
-                       .append(previousRecords)
-                       .append("\n\nIf these previous records already satisfy the goal and supplement, do not select tools again.");
-            }
-        }
-
         ReflectionHint lastHint = lastHint(state);
         if (lastHint != null) {
             humanSb.append("\n\nGuidance from previous round:");
@@ -258,12 +398,24 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             }
         }
 
+        // Recent-round progress: every completed round's own finalText, unbounded — it's already
+        // Execute's own synthesized answer (short, human-readable), not raw tool-call data, so
+        // keeping the full history costs little. priorStepsSummary (Execute's own tool-step
+        // compaction) is deliberately not read here: it's tuned for Execute's own continuity, not
+        // Planner's decision-making, and is only ever populated when a SlidingWindowContext is
+        // configured and has actually triggered — an unreliable, wrong-audience signal now that
+        // finalText coverage is unbounded.
+        StringBuilder progressSb = new StringBuilder();
         List<RoundRecord> rounds = state.getRounds();
-        if (rounds.size() > 1) {
-            RoundRecord prev = rounds.get(rounds.size() - 2);
-            if (prev.getExecutionResult() != null && prev.getExecutionResult().getFinalText() != null) {
-                humanSb.append("\n\nPrevious round summary:\n").append(prev.getExecutionResult().getFinalText());
+        for (int i = 0; i < rounds.size() - 1; i++) {
+            RoundRecord r = rounds.get(i);
+            String summary = r.getExecutionResult() != null ? r.getExecutionResult().getFinalText() : null;
+            if (summary != null && !summary.isBlank()) {
+                progressSb.append("\n\nRound ").append(r.getRoundNumber()).append(" summary:\n").append(summary);
             }
+        }
+        if (progressSb.length() > 0) {
+            humanSb.append("\n\nProgress so far:").append(progressSb);
         }
 
         messages.add(BaseMessage.fromMessage(MessageType.HUMAN.getCode(), humanSb.toString()));
@@ -271,7 +423,33 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         return ChatPromptValue.builder().messages(messages).build();
     }
 
-    private PlanOutput parsePlan(String text) {
+    /**
+     * Ids the LLM selected that don't exist among this round's real candidates — a hallucination
+     * the Planner has no other way to catch, since {@code selectedCapabilityIds} is otherwise
+     * trusted verbatim until {@code CapabilityExecutor} tries (and fails) to resolve them, by
+     * which point the round has already been wasted. Returns empty for a null plan or candidates.
+     */
+    private List<String> invalidCapabilityIds(PlanOutput parsed, List<CapabilityCandidate> candidates) {
+        if (parsed == null || parsed.getSelectedCapabilityIds() == null || candidates == null) {
+            return List.of();
+        }
+        Set<String> validIds = candidates.stream()
+                .map(CapabilityCandidate::getCapabilityId)
+                .collect(java.util.stream.Collectors.toSet());
+        return parsed.getSelectedCapabilityIds().stream()
+                .filter(id -> !validIds.contains(id))
+                .toList();
+    }
+
+    private String invalidIdCorrection(List<String> invalidIds) {
+        return "[INVALID ID ERROR] Your previous response selected id(s) that do not exist: "
+                + String.join(", ", invalidIds) + ". "
+                + "Every id in selectedCapabilityIds must be copied character-for-character from the "
+                + "\"Available capabilities\" list above — do not invent, guess, or abbreviate an id. "
+                + "Output a corrected JSON object.";
+    }
+
+    private PlanOutput tryParsePlan(String text) {
         String json = extractJson(text);
         try {
             return MAPPER.readValue(json, PlanOutput.class);
@@ -279,14 +457,40 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             try {
                 return MAPPER.readValue(repairJson(json), PlanOutput.class);
             } catch (Exception e) {
-                log.warn("Failed to parse PlanOutput, using raw text as narrative: {}", first.getMessage());
-                PlanOutput fallback = new PlanOutput();
-                fallback.setNarrative(text);
-                fallback.setSelectedCapabilityIds(List.of());
-                fallback.setReasoning("parse error");
-                return fallback;
+                log.debug("Plan parse attempt failed: {}", first.getMessage());
+                return null;
             }
         }
+    }
+
+    private PlanOutput recoverPlan(TaskExecutionState state, List<CapabilityCandidate> candidates, String rawText) {
+        // Level 1: reuse last successful plan from a previous round
+        List<RoundRecord> rounds = state.getRounds();
+        if (rounds.size() >= 2) {
+            for (int i = rounds.size() - 2; i >= 0; i--) {
+                PlanOutput prev = rounds.get(i).getPlan();
+                if (prev != null && prev.getSelectedCapabilityIds() != null
+                        && !prev.getSelectedCapabilityIds().isEmpty()) {
+                    PlanOutput recovery = new PlanOutput();
+                    recovery.setNarrative("[Recovery: reusing plan from round " + (i + 1) + "]\n" + prev.getNarrative());
+                    recovery.setSelectedCapabilityIds(new ArrayList<>(prev.getSelectedCapabilityIds()));
+                    recovery.setCapabilityInputDescriptions(prev.getCapabilityInputDescriptions());
+                    recovery.setFinalAnswerRequirements(prev.getFinalAnswerRequirements());
+                    log.warn("Plan recovery: reusing round-{} plan", i + 1);
+                    return recovery;
+                }
+            }
+        }
+        // Level 2: minimal default — select all candidates, direct synthesis
+        PlanOutput minimal = new PlanOutput();
+        minimal.setNarrative("Plan parse failed. Use all available tools to fulfill the goal: "
+                + state.getRequest().getGoal());
+        List<String> allIds = candidates == null ? List.of() :
+                candidates.stream().map(CapabilityCandidate::getCapabilityId)
+                        .collect(java.util.stream.Collectors.toList());
+        minimal.setSelectedCapabilityIds(allIds);
+        minimal.setFinalAnswerRequirements(List.of());
+        return minimal;
     }
 
     private void normalizePlan(PlanOutput plan) {
@@ -296,9 +500,6 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         }
         if (plan.getCapabilityInputDescriptions() == null) {
             plan.setCapabilityInputDescriptions(java.util.Collections.emptyMap());
-        }
-        if (plan.getResultStrategy() == null) {
-            plan.setResultStrategy(ResultStrategy.SYNTHESIZE);
         }
         if (plan.getFinalAnswerRequirements() == null) {
             plan.setFinalAnswerRequirements(List.of());
@@ -322,6 +523,23 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             return "";
         }
         return " | allowedTools: " + String.join(", ", candidate.getAllowedTools());
+    }
+
+    private String formatHistoryForNarrative(List<HistoryInfos> sessionHistory) {
+        StringBuilder sb = new StringBuilder("\n\nConversation history:\n");
+        for (HistoryInfos h : sessionHistory) {
+            if (h.getType() == HistoryInfos.Type.SUMMARY) {
+                for (BaseMessage msg : h.getMessages()) {
+                    sb.append(msg.getContent()).append("\n");
+                }
+            } else {
+                for (BaseMessage msg : h.getMessages()) {
+                    String role = MessageType.HUMAN.equalsV(msg.getRole()) ? "Human" : "Assistant";
+                    sb.append(role).append(": ").append(msg.getContent()).append("\n");
+                }
+            }
+        }
+        return sb.toString();
     }
 
     private String extractJson(String text) {
@@ -390,10 +608,20 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         return null;
     }
 
-    private RoundRecord currentRound(TaskExecutionState state) {
+    /** True if no round before the current one ever completed Execute without crashing. */
+    private boolean noRoundSucceededYet(TaskExecutionState state) {
         List<RoundRecord> rounds = state.getRounds();
-        return rounds.get(rounds.size() - 1);
+        if (rounds == null) return true;
+        for (RoundRecord r : rounds) {
+            if (r.getRoundNumber() == state.getCurrentRound()) continue; // this round, not yet run
+            ExecutionOutput exec = r.getExecutionResult();
+            if (exec != null && exec.getStatus() == ExecutionStatus.SUCCESS) {
+                return false;
+            }
+        }
+        return true;
     }
+
 
     @Override
     public void stop() {

@@ -158,7 +158,7 @@ Search → Plan → Execute → Reflect 的价值，不只是技术架构更完�
 
 ```java
 AgentResult result = regnexeAgentBuilder
-        .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+        .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
         .withPluginMarket(marketplace)
         .withEventListener(new ConsoleEventListener())
         .withMaxRounds(3)

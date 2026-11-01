@@ -23,14 +23,14 @@ import org.salt.jlangchain.rag.tools.Tool;
 import org.salt.regnexe.agent.core.RegnexeAgent;
 import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
 import org.salt.regnexe.agent.core.TestApplication;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.DefaultPluginManager;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -56,7 +56,7 @@ import java.util.List;
  * Test 3 (no LLM): file-system directory — {@code DefaultPluginManager.addDirectory(...)} loads
  * a {@code plugin.yaml} + {@code tools/} folder from disk.
  *
- * Prerequisites: Test 1 needs env var DASHSCOPE_API_KEY; Tests 2-3 do not call an LLM.
+ * Prerequisites: Test 1 needs env var DEEPSEEK_KEY; Tests 2-3 do not call an LLM.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -115,7 +115,7 @@ public class ExampleReadme05PluginPackagingTest {
         Assert.assertEquals(CapabilityType.SUB_AGENT, findCapability(tripPlugin, "trip-plugin.expense_estimator").getType());
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPlugin(tripPlugin)        // installs the PluginDescriptor directly — no marketplace to construct
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

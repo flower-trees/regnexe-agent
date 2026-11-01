@@ -22,15 +22,15 @@ import org.salt.jlangchain.rag.tools.annotation.AgentTool;
 import org.salt.regnexe.agent.core.RegnexeAgent;
 import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
 import org.salt.regnexe.agent.core.TestApplication;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.DefaultPluginManager;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.AgentSkill;
-import org.salt.regnexe.agent.core.market.plugin.AgentSubAgent;
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.plugin.AgentSkill;
+import org.salt.regnexe.agent.core.marketplace.plugin.AgentSubAgent;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -46,7 +46,7 @@ import org.springframework.test.context.junit4.SpringRunner;
  *
  * Tests 3-4 (LLM): both run end to end via {@code regnexeAgentBuilder.withPlugin(instance)}.
  *
- * Prerequisites: Tests 3-4 need env var DASHSCOPE_API_KEY.
+ * Prerequisites: Tests 3-4 need env var DEEPSEEK_KEY.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -77,7 +77,7 @@ public class Example08AnnotatedSkillSubAgentTest {
         Assert.assertNotNull(cap);
         Assert.assertEquals(CapabilityType.SUB_AGENT, cap.getType());
         Assert.assertNotNull(cap.getSubAgentConfig());
-        Assert.assertEquals("aliyun:qwen-plus", cap.getSubAgentConfig().getModel());
+        Assert.assertEquals("deepseek:deepseek-chat", cap.getSubAgentConfig().getModel());
         Assert.assertEquals(1, cap.getSubAgentConfig().getOwnTools().size());
         Assert.assertEquals("estimate_trip_cost", cap.getSubAgentConfig().getOwnTools().get(0).getName());
     }
@@ -85,7 +85,7 @@ public class Example08AnnotatedSkillSubAgentTest {
     @Test
     public void annotatedSkillShouldFinishViaAgent() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withPlugin(new TravelAdvisorSkill())
                 .withEventListener(new ConsoleEventListener())
@@ -103,7 +103,7 @@ public class Example08AnnotatedSkillSubAgentTest {
     @Test
     public void annotatedSubAgentShouldFinishViaAgent() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPlugin(new ExpenseEstimatorSubAgent())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -143,7 +143,7 @@ public class Example08AnnotatedSkillSubAgentTest {
             id = "expense_estimator",
             description = "Estimates the total cost of a business trip. " +
                           "TRIGGER: Use when the user asks for a trip budget or cost estimate.",
-            model = "aliyun:qwen-plus",
+            model = "deepseek:deepseek-chat",
             systemPrompt = """
                     You are a travel expense estimator.
                     1. Call estimate_trip_cost with the trip length and destination.

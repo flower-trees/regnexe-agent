@@ -37,7 +37,7 @@ Regnexe 把模型供应抽象出来，让 Agent 执行框架和具体模型解�
 
 ```java
 RegnexeAgent agent = regnexeAgentBuilder
-        .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+        .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
         .build();
 ```
 

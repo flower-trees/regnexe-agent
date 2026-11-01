@@ -41,15 +41,14 @@ public class InMemoryTaskStore implements TaskStore {
     }
 
     @Override
-    public List<TaskExecutionState> listResumable(String sessionId) {
-        return store.values().stream()
-                .filter(s -> sessionId.equals(s.getSessionId())
-                          && s.getStatus() == TaskStatus.PAUSED)
-                .toList();
+    public void markFinished(String taskId) {
+        // State status is already updated by the time this is called; no-op here.
     }
 
     @Override
-    public void markFinished(String taskId) {
-        // State status is already updated by the time this is called; no-op here.
+    public List<TaskExecutionState> listResumable(String sessionId) {
+        return store.values().stream()
+                .filter(s -> sessionId.equals(s.getSessionId()) && s.getStatus() != TaskStatus.FINISHED)
+                .toList();
     }
 }

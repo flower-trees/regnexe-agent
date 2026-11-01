@@ -63,7 +63,7 @@ public class WeatherPlugin {
             id = "expense_estimator",
             description = "Estimates the total cost of a business trip. " +
                           "TRIGGER: Use when the user asks for a trip budget or cost estimate.",
-            model = "aliyun:qwen-plus",
+            model = "deepseek:deepseek-chat",
             systemPrompt = """
                     You are a travel expense estimator.
                     1. Call estimate_trip_cost with the trip length and destination.
@@ -84,7 +84,7 @@ public class WeatherPlugin {
 
 ```java
 RegnexeAgent agent = regnexeAgentBuilder
-        .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+        .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
         .withPlugin(new WeatherPlugin())
         .withEventListener(new ConsoleEventListener())
         .build();

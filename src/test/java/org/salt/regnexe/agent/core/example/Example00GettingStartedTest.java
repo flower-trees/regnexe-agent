@@ -24,15 +24,15 @@ import org.salt.jlangchain.rag.tools.annotation.AgentTool;
 import org.salt.regnexe.agent.core.RegnexeAgent;
 import org.salt.regnexe.agent.core.RegnexeAgentBuilder;
 import org.salt.regnexe.agent.core.TestApplication;
-import org.salt.regnexe.agent.core.common.enums.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.ConsoleEventListener;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.market.DefaultPluginManager;
-import org.salt.regnexe.agent.core.market.SimpleMarketplace;
-import org.salt.regnexe.agent.core.market.plugin.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.market.plugin.Plugin;
-import org.salt.regnexe.agent.core.market.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.plugin.Plugin;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -49,7 +49,7 @@ import java.util.List;
  * - one full RegnexeAgent quick-start execution
  *
  * The metadata-only tests do not call an LLM. The full agent execution test
- * requires DASHSCOPE_API_KEY, like the other example tests.
+ * requires DEEPSEEK_KEY, like the other example tests.
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = TestApplication.class)
@@ -185,7 +185,7 @@ public class Example00GettingStartedTest {
     @Test
     public void readmeQuickStartAgentShouldFinish() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withPlugin(new WeatherPlugin())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -207,7 +207,7 @@ public class Example00GettingStartedTest {
     @Test
     public void withToolQuickStartAgentShouldFinish() {
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)
@@ -242,7 +242,7 @@ public class Example00GettingStartedTest {
                 .build();
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withTool(weatherTool())
                 .withSkill(travelAdvisor)
                 .withEventListener(new ConsoleEventListener())
@@ -286,7 +286,7 @@ public class Example00GettingStartedTest {
                 .build();
 
         RegnexeAgent agent = regnexeAgentBuilder
-                .withDefaultModel(Vendor.ALIYUN, "deepseek-v4-flash")
+                .withDefaultModel(Vendor.DEEPSEEK, "deepseek-v4-flash")
                 .withSubAgent(forecastPlanner)
                 .withEventListener(new ConsoleEventListener())
                 .withMaxRounds(3)

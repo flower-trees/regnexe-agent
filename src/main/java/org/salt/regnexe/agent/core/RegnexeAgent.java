@@ -17,13 +17,17 @@ package org.salt.regnexe.agent.core;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
 import org.salt.function.flow.FlowInstance;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.event.AgentEvent;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
+import org.salt.regnexe.agent.core.event.SpanIds;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
-import org.salt.regnexe.agent.core.market.Marketplace;
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.salt.regnexe.agent.core.task.ResultComposer;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
@@ -41,13 +45,16 @@ import org.salt.jlangchain.core.agent.memory.AgentContext;
 import org.salt.regnexe.agent.core.common.util.TextCompressor;
 import org.salt.jlangchain.core.history.HistoryInfos;
 import org.salt.jlangchain.core.history.memory.ConversationMemory;
-import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemory;
-import org.salt.jlangchain.core.history.memory.summarybuffer.ConversationSummaryBufferMemoryReader;
+import org.salt.jlangchain.core.history.memory.periodic.PeriodicConversationSummaryMemory;
+import org.salt.jlangchain.core.history.memory.periodic.PeriodicConversationSummaryMemoryReader;
 import org.salt.jlangchain.core.history.storage.ConversationStorage;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
 import org.salt.jlangchain.core.message.MessageType;
+import org.salt.jlangchain.core.skill.Skill;
+import org.salt.jlangchain.rag.tools.Tool;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -61,10 +68,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Not a Spring bean; obtain instances via {@link RegnexeAgentBuilder}.
  *
  * <p>Thread-safety note: one execute()/resume() call at a time per instance.
- * {@link #pause()} may be called from any thread while execute/resume is in progress.
+ * {@link #pause()} may be called from any thread while execute()/resume() is in progress.
  */
 @Slf4j
 public class RegnexeAgent {
+
+    /**
+     * Extra rounds granted on resume when the loaded task was already at its round ceiling
+     * (TIMEOUT, or interrupted on its last allowed round) — otherwise it would immediately re-hit
+     * the same ceiling and have zero chance to make progress with the resume's new instruction.
+     */
+    private static final int RESUME_ROUND_MARGIN = 3;
 
     private final FlowEngine flowEngine;
     private final ChainActor chainActor;
@@ -74,6 +88,10 @@ public class RegnexeAgent {
     private final Reflector reflector;
     private final ModelProvider llmProvider;
     private final ModelSpec defaultModel;
+    /** Nullable — TaskPlanner falls back to defaultModel when unset. */
+    private final ModelSpec plannerModel;
+    /** Nullable — Reflector falls back to defaultModel when unset. */
+    private final ModelSpec reflectorModel;
     private final Marketplace marketplace;
     private final TaskStore taskStore;
     private final ResultComposer resultComposer;
@@ -81,13 +99,18 @@ public class RegnexeAgent {
     private final AgentEventListener eventListener;
     private final ConversationStorage sessionStorage;
     private final int sessionBufferSize;
+    private final int sessionCompactPeriod;
     private final AgentContext agentContext;
     private final int maxAgentIterations;
+    private final int maxConsecutiveToolFailures;
     private final int maxContextOutputChars;
     private final boolean verbose;
     private final ConversationMemory sessionMemory;
+    private final Path claudeCompatWorkspace;
+    private final String projectMemory;
+    private final java.util.Set<String> baseToolNames;
 
-    /** Set at the start of each execute()/resume(); checked by pause(). */
+    /** Set at the start of each execute(); checked by pause(). */
     private volatile AtomicBoolean activeStopSignal;
 
     RegnexeAgent(FlowEngine flowEngine,
@@ -98,6 +121,8 @@ public class RegnexeAgent {
                 Reflector reflector,
                 ModelProvider llmProvider,
                 ModelSpec defaultModel,
+                ModelSpec plannerModel,
+                ModelSpec reflectorModel,
                 Marketplace marketplace,
                 TaskStore taskStore,
                 ResultComposer resultComposer,
@@ -105,11 +130,16 @@ public class RegnexeAgent {
                 AgentEventListener eventListener,
                 ConversationStorage sessionStorage,
                 int sessionBufferSize,
+                int sessionCompactPeriod,
                 AgentContext agentContext,
                 int maxAgentIterations,
+                int maxConsecutiveToolFailures,
                 int maxContextOutputChars,
                 boolean verbose,
-                ConversationMemory sessionMemory) {
+                ConversationMemory sessionMemory,
+                Path claudeCompatWorkspace,
+                String projectMemory,
+                java.util.Set<String> baseToolNames) {
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -118,6 +148,8 @@ public class RegnexeAgent {
         this.reflector = reflector;
         this.llmProvider = llmProvider;
         this.defaultModel = defaultModel;
+        this.plannerModel = plannerModel;
+        this.reflectorModel = reflectorModel;
         this.marketplace = marketplace;
         this.taskStore = taskStore;
         this.resultComposer = resultComposer;
@@ -125,11 +157,16 @@ public class RegnexeAgent {
         this.eventListener = eventListener;
         this.sessionStorage = sessionStorage;
         this.sessionBufferSize = sessionBufferSize;
+        this.sessionCompactPeriod = sessionCompactPeriod;
         this.agentContext = agentContext;
         this.maxAgentIterations = maxAgentIterations;
+        this.maxConsecutiveToolFailures = maxConsecutiveToolFailures;
         this.maxContextOutputChars = maxContextOutputChars;
         this.verbose = verbose;
         this.sessionMemory = sessionMemory;
+        this.claudeCompatWorkspace = claudeCompatWorkspace;
+        this.projectMemory = projectMemory;
+        this.baseToolNames = baseToolNames != null ? baseToolNames : java.util.Set.of();
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -144,17 +181,26 @@ public class RegnexeAgent {
         TaskExecutionState state = initState(request);
         taskStore.save(state);
 
+        String runSpan = SpanIds.rootSpanId(state.getTaskId());
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), 0, EventType.AGENT_STARTED,
-                "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds));
+                "Goal: " + request.getGoal() + " | maxRounds: " + maxRounds).inSpan(runSpan, null));
 
         List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
-        return runLoop(state, sessionHistory, false);
+        return runLoop(state, sessionHistory, runSpan);
     }
 
     /**
-     * Resume the most recently paused task for the given session.
-     * The supplement input is appended to the original request so Planner can see
-     * both the original goal and the new context in separate prompt sections.
+     * Resume the most recently updated unfinished task for the given session (see
+     * {@code TaskStore.listResumable}) — whatever it was doing (RUNNING, PAUSED, FAILED,
+     * ESCALATED, or TIMEOUT), continuing with its full round/tool-call history intact via the
+     * same {@code state.priorSteps}/{@code priorStepsSummary} carried across rounds during a
+     * normal run. No resume-specific mode is threaded through Plan/Execute/Reflect — reloading
+     * the persisted state and re-entering the same {@link #runLoop} is sufficient.
+     *
+     * @param supplementInput optional extra instruction, appended onto the task's original goal
+     *                         so every phase's existing "Goal" prompt section picks it up
+     *                         without any dedicated plumbing
+     * @throws IllegalStateException if no resumable task exists for this session
      */
     public AgentResult resume(String sessionId, String supplementInput) {
         List<TaskExecutionState> resumable = taskStore.listResumable(sessionId);
@@ -165,24 +211,32 @@ public class RegnexeAgent {
                 .max(Comparator.comparingLong(TaskExecutionState::getUpdatedAt))
                 .orElseThrow();
 
-        state.setStatus(TaskStatus.RUNNING);
         if (supplementInput != null && !supplementInput.isBlank()) {
-            state.getRequest().setSupplementInput(supplementInput);
+            String goal = state.getRequest().getGoal();
+            state.getRequest().setGoal((goal == null || goal.isBlank() ? "" : goal + "\n\n")
+                    + "[Resumed with additional instruction]: " + supplementInput);
         }
+        if (state.getCurrentRound() >= state.getMaxRounds()) {
+            state.setMaxRounds(state.getMaxRounds() + RESUME_ROUND_MARGIN);
+        }
+        state.setStatus(TaskStatus.RUNNING);
 
+        // A resumed run is a child of the task's original root span, so it lands in the same trace.
+        String runSpan = SpanIds.next();
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_STARTED,
                 "Resuming | rounds done: " + state.getCurrentRound()
-                + (supplementInput != null ? " | supplement: " + supplementInput : "")));
+                + (supplementInput != null && !supplementInput.isBlank()
+                        ? " | supplement: " + supplementInput : ""))
+                .inSpan(runSpan, SpanIds.rootSpanId(state.getTaskId())));
 
         List<HistoryInfos> sessionHistory = loadSessionHistory(state.getSessionId());
-        return runLoop(state, sessionHistory, true);
+        return runLoop(state, sessionHistory, runSpan);
     }
 
     /**
-     * Signal the currently-running McpAgentExecutor to stop.
-     * The task transitions to PAUSED and can be resumed via {@link #resume}.
-     * Safe to call from any thread.
+     * Signal the currently-running McpAgentExecutor to stop. The task transitions to PAUSED and
+     * can be resumed via {@link #resume}. Safe to call from any thread.
      */
     public void pause() {
         AtomicBoolean signal = this.activeStopSignal;
@@ -191,16 +245,138 @@ public class RegnexeAgent {
         }
     }
 
+    /** Read-only access to the marketplace, e.g. for a CLI to list/resolve capabilities by name. */
+    public Marketplace getMarketplace() {
+        return marketplace;
+    }
+
+    /**
+     * Directly invoke a SKILL capability by id, bypassing Search/Plan/Reflect.
+     * Used for explicit user-triggered invocation (e.g. CLI "/skill-name args"), as opposed to
+     * the planner autonomously selecting the skill during {@link #execute}.
+     *
+     * <p>Does not create a {@link TaskExecutionState} or touch {@code taskStore} — a skill run
+     * cannot be paused via {@link #pause()}. Events still flow through
+     * the same {@link #eventListener} used by execute(), so a caller's event rendering
+     * (including the {@code TASK_TOKEN_SUMMARY} that {@code TokenAggregatingEventListener} emits
+     * before {@code AGENT_COMPLETED}) needs no special-casing.
+     *
+     * @param capabilityId capability id as registered in the marketplace (format:
+     *                      {@code <pluginId>.<skillName>})
+     * @param args          raw argument text passed to the skill's internal executor as the user turn
+     * @param sessionId     session to store the resulting turn under; null skips session-history storage
+     * @param displayGoal   human-readable form for session history (e.g. "/review src/Foo.java");
+     *                      falls back to "/<capabilityId> <args>" when null/blank
+     */
+    public AgentResult executeSkill(String capabilityId, String args, String sessionId, String displayGoal) {
+        CapabilityDescriptor cap = marketplace.resolveDescriptor(capabilityId);
+        if (cap == null) {
+            throw new IllegalArgumentException("Unknown skill: " + capabilityId);
+        }
+        if (cap.getType() != CapabilityType.SKILL || cap.getSkillConfig() == null) {
+            throw new IllegalArgumentException("Not a skill capability: " + capabilityId);
+        }
+
+        String taskId = UUID.randomUUID().toString();
+        BaseChatModel llm = llmProvider.provide(defaultModel);
+
+        String runSpan = SpanIds.rootSpanId(taskId);
+        LoopSpans spans = new LoopSpans(() -> runSpan);
+        eventListener.dispatch(AgentEvent.of(taskId, 0, EventType.AGENT_STARTED,
+                "Skill: " + capabilityId + " | args: " + args).inSpan(runSpan, null));
+
+        Skill.Builder skillBuilder = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
+        // executeSkill() otherwise falls back to j-langchain Skill.Builder's own
+        // DEFAULT_MAX_ITERATIONS (10) — a hardcoded budget the CLI's agent.max_agent_iterations
+        // config has never reached. Confirmed for real: robot-article-writing's actual workflow
+        // (query schema, read news-sources.md, cross-check existing articles, research, draft,
+        // upload images, dry-run, commit) burned all 10 just on setup/orientation and got cut
+        // off with "Max iterations (10) reached" before doing any real work. Only apply our
+        // configured budget when the skill's own SKILL.md hasn't deliberately declared a
+        // tighter/looser one — respect explicit skill-author intent over the CLI default.
+        if (cap.getSkillConfig().getMaxIterations() == null) {
+            skillBuilder.maxIterations(maxAgentIterations);
+        }
+        // Resolve the same baseToolNames the Planner-driven path (CapabilityExecutor's SKILL
+        // branch) unconditionally grants every selected skill — see that class's javadoc: "a
+        // Skill shares the main agent's full tool access because it runs in the same context".
+        // Without this, /skill-name direct invocation was the ONE path that did NOT share it:
+        // Skill.from(...) builds a standalone Skill with no parentTools injected, so a skill
+        // whose job requires touching real project files (not just its own .rex/ tree) had no
+        // way to reach them — confirmed for real against robot-article-writing, whose lib/db.py
+        // and lib/upload.py live at the project root, one level above the claudeCompatWorkspace
+        // sandbox: file_exists/list_directory calls for anything outside it threw
+        // "SecurityException: Path escapes workspace", and the LLM had no fallback but to
+        // (incorrectly) write article payloads into the sandbox instead of the real DB.
+        List<Tool> baseTools = baseToolNames.stream()
+                .map(marketplace::resolveDescriptor)
+                .filter(java.util.Objects::nonNull)
+                .map(CapabilityDescriptor::getTool)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (!baseTools.isEmpty()) {
+            // Real tool access supersedes the claudeCompatMode sandbox for this skill: leaving
+            // both active would register two tools named "bash"/"read_file" (SkillWorkspaceTools
+            // uses the same names as FileTools/BashTool), which is at best redundant and at worst
+            // lets the model reach for the sandboxed one when the real one was intended.
+            skillBuilder.claudeCompatMode(false);
+        } else if (claudeCompatWorkspace != null) {
+            skillBuilder.claudeCompatWorkspace(claudeCompatWorkspace);
+        }
+        if (verbose) {
+            skillBuilder.verbose(true);
+        } else {
+            String scope = "[skill:" + cap.getName() + "]";
+            skillBuilder.onLlm(text -> eventListener.dispatch(spans.llmStarted(
+                    AgentEvent.of(taskId, 0, EventType.SKILL_LLM_RESPONDED, scope + " " + text))));
+            skillBuilder.onToolCall(tc -> eventListener.dispatch(spans.toolCalled(
+                    AgentEvent.of(taskId, 0, EventType.TOOL_CALLED, scope + " " + tc))));
+            skillBuilder.onObservation(obs -> eventListener.dispatch(spans.toolResult(
+                    AgentEvent.of(taskId, 0, EventType.TOOL_RESULT, scope + " " + obs))));
+        }
+        skillBuilder.onTokenUsage(u -> eventListener.dispatch(spans.llmFollowUp(
+                AgentEvent.ofCapabilityTokenUsage(taskId, 0, cap.getName(), u))));
+
+        String finalText;
+        TaskStatus status;
+        try {
+            Skill skill = skillBuilder.build();
+            if (!baseTools.isEmpty()) {
+                skill.injectParentTools(baseTools);
+            }
+            finalText = skill.invoke(args == null ? "" : args);
+            status = TaskStatus.FINISHED;
+        } catch (Exception e) {
+            log.warn("executeSkill '{}' failed: {}", capabilityId, e.getMessage());
+            finalText = "Skill execution failed: " + e.getMessage();
+            status = TaskStatus.FAILED;
+        }
+
+        if (sessionId != null && status == TaskStatus.FINISHED) {
+            String humanTurn = (displayGoal != null && !displayGoal.isBlank())
+                    ? displayGoal : ("/" + capabilityId + " " + (args == null ? "" : args)).trim();
+            storeSessionRound(sessionId, humanTurn, finalText);
+        }
+
+        eventListener.dispatch(AgentEvent.of(taskId, 0, EventType.AGENT_COMPLETED,
+                "Status: " + status + " | Skill: " + capabilityId).inSpan(runSpan, null));
+
+        return AgentResult.builder()
+                .taskId(taskId)
+                .status(status)
+                .finalText(finalText)
+                .build();
+    }
+
     // ── Loop ─────────────────────────────────────────────────────────────────
 
-    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory, boolean resumeMode) {
+    private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory, String runSpan) {
         AtomicBoolean stopSignal = new AtomicBoolean(false);
         this.activeStopSignal = stopSignal;
 
-        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory, resumeMode);
+        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory);
+        transmitMap.put(ContextBusKeys.RUN_SPAN_ID, runSpan);
 
-        // Loop condition uses state.getCurrentRound() so resume continues correctly
-        // from wherever the prior execution left off.
         FlowInstance flowInstance = flowEngine.builder()
                 .loop(
                         i -> state.getStatus() == TaskStatus.RUNNING
@@ -212,9 +388,17 @@ public class RegnexeAgent {
         try {
             flowEngine.execute(flowInstance, state.getRequest(), transmitMap);
         } catch (Exception e) {
+            // Every loop failure is a hard FAILED, not classified by HTTP code into a separate
+            // PAUSED bucket — FAILED itself is resumable now (see docs/design/resume-task-design.md
+            // in regnexe-cli), so there's no need for a second "safer to retry" status.
             log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
             state.setStatus(TaskStatus.FAILED);
             taskStore.save(state);
+            // Listeners need the task's end even when it dies here: without it the run's span
+            // never closes and no token summary is emitted for what was already spent.
+            eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                    EventType.AGENT_COMPLETED,
+                    "Status: " + state.getStatus() + " | " + e.getMessage()).inSpan(runSpan, null));
             throw e;
         }
 
@@ -231,7 +415,15 @@ public class RegnexeAgent {
                 : rounds.get(rounds.size() - 1).getReflection();
         String finalText = resultComposer.compose(state, lastDecision);
 
-        if (state.getStatus() == TaskStatus.FINISHED || state.getStatus() == TaskStatus.ESCALATED) {
+        // FINISHED/ESCALATED were the only statuses that used to leave a conversation_turns
+        // trace — FAILED and TIMEOUT are just as settled (the loop won't advance this task any
+        // further on its own) and deserve the same visibility in /history, not silence. A task
+        // still RUNNING here (interrupted by a hard kill, not caught by any of this method's own
+        // exception handling) is deliberately excluded — it's not settled, and /resume's
+        // listResumable() already surfaces it with real round-by-round detail; /history isn't
+        // the right place to guess at an unresolved task's content.
+        if (state.getStatus() == TaskStatus.FINISHED || state.getStatus() == TaskStatus.ESCALATED
+                || state.getStatus() == TaskStatus.FAILED || state.getStatus() == TaskStatus.TIMEOUT) {
             String displayGoal = state.getRequest().getDisplayGoal();
             String humanTurn = (displayGoal != null && !displayGoal.isBlank())
                     ? displayGoal : state.getRequest().getGoal();
@@ -240,7 +432,7 @@ public class RegnexeAgent {
 
         eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
                 EventType.AGENT_COMPLETED,
-                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()));
+                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()).inSpan(runSpan, null));
 
         return AgentResult.builder()
                 .taskId(state.getTaskId())
@@ -252,8 +444,7 @@ public class RegnexeAgent {
 
     private Map<String, Object> buildTransmitMap(TaskExecutionState state,
                                                   AtomicBoolean stopSignal,
-                                                  List<HistoryInfos> sessionHistory,
-                                                  boolean resumeMode) {
+                                                  List<HistoryInfos> sessionHistory) {
         Map<String, Object> map = new HashMap<>();
         map.put(ContextBusKeys.STATE, state);
         map.put(ContextBusKeys.CHAIN_ACTOR, chainActor);
@@ -266,6 +457,8 @@ public class RegnexeAgent {
         }
         if (defaultModel != null) {
             map.put(ContextBusKeys.DEFAULT_MODEL, defaultModel);
+            if (plannerModel != null) map.put(ContextBusKeys.PLANNER_MODEL, plannerModel);
+            if (reflectorModel != null) map.put(ContextBusKeys.REFLECTOR_MODEL, reflectorModel);
         }
         if (marketplace != null) {
             map.put(ContextBusKeys.MARKETPLACE, marketplace);
@@ -273,10 +466,22 @@ public class RegnexeAgent {
         if (sessionHistory != null && !sessionHistory.isEmpty()) {
             map.put(ContextBusKeys.SESSION_HISTORY, sessionHistory);
         }
-        map.put(ContextBusKeys.RESUME_MODE, resumeMode);
         map.put(ContextBusKeys.MAX_AGENT_ITERATIONS, maxAgentIterations);
+        // Untouched baseline for TaskPlanner to compute each round's override against — see its
+        // own javadoc for why MAX_AGENT_ITERATIONS itself (mutated per round) isn't safe to reuse.
+        map.put(ContextBusKeys.MAX_AGENT_ITERATIONS_DEFAULT, maxAgentIterations);
+        map.put(ContextBusKeys.MAX_CONSECUTIVE_TOOL_FAILURES, maxConsecutiveToolFailures);
         map.put(ContextBusKeys.MAX_CONTEXT_OUTPUT_CHARS, maxContextOutputChars);
         map.put(ContextBusKeys.VERBOSE, verbose);
+        if (claudeCompatWorkspace != null) {
+            map.put(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE, claudeCompatWorkspace);
+        }
+        if (projectMemory != null && !projectMemory.isBlank()) {
+            map.put(ContextBusKeys.PROJECT_MEMORY, projectMemory);
+        }
+        if (!baseToolNames.isEmpty()) {
+            map.put(ContextBusKeys.BASE_TOOL_NAMES, baseToolNames);
+        }
         return map;
     }
 
@@ -304,9 +509,8 @@ public class RegnexeAgent {
         if (sessionMemory != null) {
             history = sessionMemory.readHistory();
         } else if (sessionStorage != null) {
-            long longId = (long) sessionId.hashCode();
-            history = ConversationSummaryBufferMemoryReader.builder()
-                    .appId(0L).userId(0L).sessionId(longId).storage(sessionStorage).build()
+            history = PeriodicConversationSummaryMemoryReader.builder()
+                    .appId("0").userId("0").sessionId(sessionId).storage(sessionStorage).build()
                     .readHistory();
         } else {
             return null;
@@ -327,10 +531,13 @@ public class RegnexeAgent {
                 log.debug("Session storer skipped: no defaultModel configured for summary LLM");
                 return;
             }
-            long longId = (long) sessionId.hashCode();
-            memory = ConversationSummaryBufferMemory.builder()
-                    .appId(0L).userId(0L).sessionId(longId)
-                    .maxSize(sessionBufferSize)
+            // Periodic (batch) compaction by default: compresses a whole batch of rounds at
+            // once when the buffer fills, instead of one round every time it overflows — far
+            // fewer summarization LLM calls on long sessions than the old rolling strategy
+            // (ConversationSummaryBufferMemory, still available via explicit withSessionMemory).
+            memory = PeriodicConversationSummaryMemory.builder()
+                    .appId("0").userId("0").sessionId(sessionId)
+                    .maxSize(sessionCompactPeriod)
                     .storage(sessionStorage)
                     .llm(llmProvider.provide(defaultModel))
                     .build();

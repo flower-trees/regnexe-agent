@@ -34,11 +34,20 @@ public enum EventType {
     TOOL_RESULT,
     TOKEN_USAGE,
 
+    // The executor's self-maintained checklist changed (write_todos tool). Text is the todo
+    // list as JSON — see CapabilityExecutor.buildWriteTodosTool().
+    TODOS_UPDATED,
+
     // Phase-specific LLM hooks for trace clarity
     PLAN_LLM_RESPONDED,
     REFLECT_LLM_RESPONDED,
     SKILL_LLM_RESPONDED,
     AGENT_LLM_RESPONDED,
+
+    // Raw model output of a Plan / Reflect LLM call. Despite their names, the *_LLM_RESPONDED
+    // events above fire before the model is called and carry the prompt; this one fires after it
+    // returns and is followed by that call's TOKEN_USAGE.
+    LLM_OUTPUT,
 
     // Token usage from inner capability (Skill / SubAgent) LLM calls
     CAPABILITY_TOKEN_USAGE,

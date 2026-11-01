@@ -14,6 +14,7 @@
 
 package org.salt.regnexe.agent.core.task;
 
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
@@ -21,7 +22,16 @@ import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
 import java.util.List;
 
 /**
- * Returns the finalText from the last round that produced an execution result.
+ * Composes the text returned to the caller when a task stops.
+ *
+ * <p>FINISHED tasks return the last round's {@code finalText} — that's Execute's own genuine
+ * final answer to the user's goal, exactly what should be shown. Any other outcome (TIMEOUT,
+ * ESCALATED, or a round that failed before ever finishing) prefers Reflector's own {@code reason}
+ * instead: since {@link org.salt.regnexe.agent.core.task.worker.CapabilityExecutor} leaves a
+ * failed round's {@code finalText} as a short fixed marker, {@code reason} is the text that
+ * actually says why the task didn't finish. Never returns null — a task that produced no usable
+ * text from either source still gets an honest, synthesized status line rather than silently
+ * showing nothing to the caller.
  */
 public class DefaultResultComposer implements ResultComposer {
 
@@ -29,15 +39,26 @@ public class DefaultResultComposer implements ResultComposer {
     public String compose(TaskExecutionState state, ReflectionDecision decision) {
         List<RoundRecord> rounds = state.getRounds();
         if (rounds == null || rounds.isEmpty()) {
-            return null;
+            return "Task ended (" + state.getStatus() + ") with no rounds recorded.";
         }
+
+        if (state.getStatus() != TaskStatus.FINISHED) {
+            String reason = decision != null ? decision.getReason() : null;
+            if (reason != null && !reason.isBlank()) {
+                return reason;
+            }
+        }
+
         for (int i = rounds.size() - 1; i >= 0; i--) {
             RoundRecord round = rounds.get(i);
             if (round.getExecutionResult() != null
-                    && round.getExecutionResult().getFinalText() != null) {
+                    && round.getExecutionResult().getFinalText() != null
+                    && !round.getExecutionResult().getFinalText().isBlank()) {
                 return round.getExecutionResult().getFinalText();
             }
         }
-        return null;
+
+        return "Task ended (" + state.getStatus() + ") after " + rounds.size()
+                + " round(s) without a usable result.";
     }
 }
