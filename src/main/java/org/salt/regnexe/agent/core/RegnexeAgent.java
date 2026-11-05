@@ -365,7 +365,14 @@ public class RegnexeAgent {
         } catch (Exception e) {
             log.warn("executeSkill '{}' failed: {}", capabilityId, e.getMessage());
             finalText = "Skill execution failed: " + e.getMessage();
-            status = TaskStatus.FAILED;
+            boolean interrupted = Thread.currentThread().isInterrupted();
+            Throwable cause = e;
+            while (cause != null) {
+                interrupted |= cause instanceof org.salt.jlangchain.core.agent.AgentStoppedException;
+                cause = cause.getCause();
+            }
+            status = interrupted ? TaskStatus.PAUSED : TaskStatus.FAILED;
+            if (interrupted) { Thread.interrupted(); finalText = "Skill interrupted by user."; }
         }
 
         if (sessionId != null && status == TaskStatus.FINISHED) {
@@ -395,7 +402,7 @@ public class RegnexeAgent {
 
         FlowInstance flowInstance = flowEngine.builder()
                 .loop(
-                        i -> state.getStatus() == TaskStatus.RUNNING
+                        i -> state.getStatus() == TaskStatus.RUNNING && !stopSignal.get()
                                 && state.getCurrentRound() < state.getMaxRounds(),
                         capabilitySearcher, taskPlanner, capabilityExecutor, reflector
                 )
@@ -404,18 +411,26 @@ public class RegnexeAgent {
         try {
             flowEngine.execute(flowInstance, state.getRequest(), transmitMap);
         } catch (Exception e) {
-            // Every loop failure is a hard FAILED, not classified by HTTP code into a separate
-            // PAUSED bucket — FAILED itself is resumable now (see docs/design/resume-task-design.md
-            // in regnexe-cli), so there's no need for a second "safer to retry" status.
-            log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
-            state.setStatus(TaskStatus.FAILED);
+            if (stopSignal.get() || Thread.currentThread().isInterrupted()) {
+                // Cancellation is a resumable pause, including cancellation during planning/network I/O.
+                Thread.interrupted();
+                state.setStatus(TaskStatus.PAUSED);
+                taskStore.save(state);
+            } else {
+                log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
+                state.setStatus(TaskStatus.FAILED);
+                taskStore.save(state);
+                eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                        EventType.AGENT_COMPLETED,
+                        "Status: " + state.getStatus() + " | " + e.getMessage()).inSpan(runSpan, null));
+                this.activeStopSignal = null;
+                throw e;
+            }
+        }
+        if (stopSignal.get()) {
+            Thread.interrupted();
+            state.setStatus(TaskStatus.PAUSED);
             taskStore.save(state);
-            // Listeners need the task's end even when it dies here: without it the run's span
-            // never closes and no token summary is emitted for what was already spent.
-            eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
-                    EventType.AGENT_COMPLETED,
-                    "Status: " + state.getStatus() + " | " + e.getMessage()).inSpan(runSpan, null));
-            throw e;
         }
 
         if (state.getStatus() == TaskStatus.RUNNING) {
@@ -429,7 +444,9 @@ public class RegnexeAgent {
         ReflectionDecision lastDecision = (rounds == null || rounds.isEmpty())
                 ? null
                 : rounds.get(rounds.size() - 1).getReflection();
-        String finalText = resultComposer.compose(state, lastDecision);
+        String finalText = state.getStatus() == TaskStatus.PAUSED
+                ? (state.getLastToolResult() != null ? state.getLastToolResult() : "Task interrupted by user.")
+                : resultComposer.compose(state, lastDecision);
 
         // FINISHED/ESCALATED were the only statuses that used to leave a conversation_turns
         // trace — FAILED and TIMEOUT are just as settled (the loop won't advance this task any
