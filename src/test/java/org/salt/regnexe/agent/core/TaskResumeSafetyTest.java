@@ -9,7 +9,7 @@ import org.salt.regnexe.agent.core.task.store.*;
 import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.*;
 
-/** No model calls: stop at the first execution event, after revision validation/claim. */
+/** No model calls: stop at the first execution event, after task validation/loading. */
 public class TaskResumeSafetyTest {
     private static class Claimed extends RuntimeException {}
 
@@ -41,65 +41,33 @@ public class TaskResumeSafetyTest {
         store.save(task("newer", 100));
         AtomicReference<String> observed = new AtomicReference<>();
         var agent = agent(store, event -> { observed.set(event.getTaskId()); throw new Claimed(); });
-        assertThrows(Claimed.class, () -> agent.resumeTask("session", "previewed", 1, "extra"));
+        assertThrows(Claimed.class, () -> agent.resumeTask("session", "previewed", "extra"));
         assertEquals("previewed", observed.get());
         var saved = store.load("previewed").orElseThrow();
-        assertEquals(2, saved.getVersion());
         assertEquals(TaskStatus.RUNNING, saved.getStatus());
         assertTrue(saved.getRequest().getGoal().contains("extra"));
         assertEquals(TaskStatus.PAUSED, store.load("newer").orElseThrow().getStatus());
     }
 
-    @Test public void rejectsChangedFinishedForeignOrMissingTaskBeforeExecution() throws Exception {
+    @Test public void rejectsFinishedForeignOrMissingTaskBeforeExecution() throws Exception {
         var store = new InMemoryTaskStore();
         var state = task("task", 1); store.save(state);
         var agent = agent(store, event -> { throw new AssertionError("Must not execute"); });
-        assertThrows(TaskConflictException.class, () -> agent.resumeTask("session", "task", 0, "extra"));
-        assertThrows(IllegalStateException.class, () -> agent.resumeTask("other", "task", 1, "extra"));
-        assertThrows(IllegalStateException.class, () -> agent.resumeTask("session", "missing", 0, "extra"));
+        assertThrows(IllegalStateException.class, () -> agent.resumeTask("other", "task", "extra"));
+        assertThrows(IllegalStateException.class, () -> agent.resumeTask("session", "missing", "extra"));
         state.setStatus(TaskStatus.FINISHED); store.save(state);
-        assertThrows(IllegalStateException.class, () -> agent.resumeTask("session", "task", 2, "extra"));
+        assertThrows(IllegalStateException.class, () -> agent.resumeTask("session", "task", "extra"));
         assertEquals("goal task", store.load("task").orElseThrow().getRequest().getGoal());
     }
 
-    @Test public void saveConflictStopsResumeBeforeEvents() throws Exception {
-        var backing = new InMemoryTaskStore(); backing.save(task("task", 1));
-        TaskStore racing = new TaskStore() {
-            public java.util.Optional<TaskExecutionState> load(String id) { return backing.load(id); }
-            public java.util.List<TaskExecutionState> listResumable(String id) { return backing.listResumable(id); }
-            public void markFinished(String id) {}
-            public void save(TaskExecutionState state) { throw new TaskConflictException(state.getTaskId()); }
-        };
-        var agent = agent(racing, event -> { throw new AssertionError("Must not execute"); });
-        assertThrows(TaskConflictException.class, () -> agent.resumeTask("session", "task", 1, "extra"));
-        assertEquals(TaskStatus.PAUSED, backing.load("task").orElseThrow().getStatus());
-    }
-
-    @Test public void staleInMemorySnapshotCannotOverwriteWinner() {
-        var store = new InMemoryTaskStore(); store.save(task("task", 1));
-        var first = store.load("task").orElseThrow();
-        var stale = store.load("task").orElseThrow();
-        first.setStatus(TaskStatus.FINISHED); store.save(first);
-        stale.setStatus(TaskStatus.RUNNING);
-        assertThrows(TaskConflictException.class, () -> store.save(stale));
-        assertEquals(TaskStatus.FINISHED, store.load("task").orElseThrow().getStatus());
-    }
-    @Test public void nestedStepsAreDetachedAndMessagesKeepTheirTypes() {
+    @Test public void reloadsSelectedTaskAtExecutionTime() throws Exception {
         var store = new InMemoryTaskStore();
-        var state = task("task", 1);
-        var round = new org.salt.regnexe.agent.core.task.state.RoundRecord();
-        state.setRounds(new java.util.ArrayList<>(java.util.List.of(round)));
-        state.setPriorSteps(java.util.List.of(org.salt.jlangchain.core.agent.memory.AgentStep.ofFunctionCall(
-                org.salt.jlangchain.core.message.AIMessage.builder().content("check").build(),
-                java.util.List.of(org.salt.jlangchain.core.message.ToolMessage.builder()
-                        .name("read").toolCallId("call").content("ok").build()))));
-        store.save(state);
-        var loaded = store.load("task").orElseThrow();
-        assertNotSame(state.getRounds().get(0), loaded.getRounds().get(0));
-        assertEquals("check", loaded.getPriorSteps().get(0).getAiMessage().getContent());
-        assertTrue(loaded.getPriorSteps().get(0).getToolResults().get(0)
-                instanceof org.salt.jlangchain.core.message.ToolMessage);
-        assertTrue(new TaskConflictException("task") instanceof org.salt.jlangchain.core.agent.AgentException);
+        store.save(task("task", 1));
+        var updated = task("task", 2);
+        updated.getRequest().setGoal("latest goal");
+        store.save(updated);
+        var agent = agent(store, event -> { throw new Claimed(); });
+        assertThrows(Claimed.class, () -> agent.resumeTask("session", "task", "extra"));
+        assertTrue(store.load("task").orElseThrow().getRequest().getGoal().startsWith("latest goal"));
     }
-
 }

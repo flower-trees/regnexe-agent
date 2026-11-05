@@ -211,18 +211,15 @@ public class RegnexeAgent {
                 .max(Comparator.comparingLong(TaskExecutionState::getUpdatedAt))
                 .orElseThrow();
 
-        return resumeTask(sessionId, state.getTaskId(), state.getVersion(), supplementInput);
+        return resumeTask(sessionId, state.getTaskId(), supplementInput);
     }
 
     /** Resume exactly the previewed task. Callers must also serialize session execution. */
-    public AgentResult resumeTask(String sessionId, String taskId, long expectedVersion, String supplementInput) {
+    public AgentResult resumeTask(String sessionId, String taskId, String supplementInput) {
         TaskExecutionState state = taskStore.load(taskId)
                 .orElseThrow(() -> new IllegalStateException("Task no longer exists: " + taskId));
         if (!java.util.Objects.equals(sessionId, state.getSessionId())) {
             throw new IllegalStateException("Task does not belong to session: " + sessionId);
-        }
-        if (state.getVersion() != expectedVersion) {
-            throw new org.salt.regnexe.agent.core.task.store.TaskConflictException(taskId);
         }
         if (state.getStatus() == TaskStatus.FINISHED) {
             throw new IllegalStateException("Task is already finished: " + taskId);
@@ -237,7 +234,7 @@ public class RegnexeAgent {
         }
         state.setStatus(TaskStatus.RUNNING);
         state.setUpdatedAt(System.currentTimeMillis());
-        // Claim the exact revision before events, history loading, or any model/tool calls.
+        // Persist resumed progress before events, history loading, or model/tool calls.
         taskStore.save(state);
 
         // A resumed run is a child of the task's original root span, so it lands in the same trace.
@@ -411,15 +408,6 @@ public class RegnexeAgent {
             // PAUSED bucket — FAILED itself is resumable now (see docs/design/resume-task-design.md
             // in regnexe-cli), so there's no need for a second "safer to retry" status.
             log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
-            // A conflict is terminal for this executor: never save its stale snapshot again.
-            Throwable conflict = e;
-            while (conflict != null) {
-                if (conflict instanceof org.salt.regnexe.agent.core.task.store.TaskConflictException) {
-                    this.activeStopSignal = null;
-                    throw e;
-                }
-                conflict = conflict.getCause();
-            }
             state.setStatus(TaskStatus.FAILED);
             taskStore.save(state);
             // Listeners need the task's end even when it dies here: without it the run's span

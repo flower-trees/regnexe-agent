@@ -25,9 +25,7 @@ import java.util.Optional;
  */
 public interface TaskStore {
 
-    /** Insert version zero, or compare-and-swap an existing revision; advance on success.
-     * Implementations must throw TaskConflictException on a stale revision.
-     */
+    /** Persist task progress; the host must serialize execution for a session. */
     void save(TaskExecutionState state);
 
     Optional<TaskExecutionState> load(String taskId);

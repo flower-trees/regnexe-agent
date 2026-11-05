@@ -23,38 +23,21 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * In-memory TaskStore for M0. Snapshots and revisions are isolated, including nested round and tool records.
+ * In-memory TaskStore for M0. State objects are stored by reference;
+ * no serialization occurs, so updates to state are reflected immediately.
  */
 public class InMemoryTaskStore implements TaskStore {
 
     private final Map<String, TaskExecutionState> store = new ConcurrentHashMap<>();
 
     @Override
-    public synchronized void save(TaskExecutionState state) {
-        TaskExecutionState previous = store.get(state.getTaskId());
-        if ((previous == null && state.getVersion() != 0)
-                || (previous != null && previous.getVersion() != state.getVersion())) {
-            throw new TaskConflictException(state.getTaskId());
-        }
-        TaskExecutionState saved = snapshot(state);
-        saved.setVersion(state.getVersion() + 1);
-        store.put(state.getTaskId(), saved);
-        state.setVersion(saved.getVersion());
-    }
-
-    private static final com.fasterxml.jackson.databind.ObjectMapper SNAPSHOTS = TaskMessageDeserializer.loadMapper();
-
-    private TaskExecutionState snapshot(TaskExecutionState state) {
-        try {
-            return SNAPSHOTS.readValue(SNAPSHOTS.writeValueAsBytes(state), TaskExecutionState.class);
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException("Cannot snapshot task: " + state.getTaskId(), e);
-        }
+    public void save(TaskExecutionState state) {
+        store.put(state.getTaskId(), state);
     }
 
     @Override
     public Optional<TaskExecutionState> load(String taskId) {
-        return Optional.ofNullable(store.get(taskId)).map(this::snapshot);
+        return Optional.ofNullable(store.get(taskId));
     }
 
     @Override
@@ -66,6 +49,6 @@ public class InMemoryTaskStore implements TaskStore {
     public List<TaskExecutionState> listResumable(String sessionId) {
         return store.values().stream()
                 .filter(s -> sessionId.equals(s.getSessionId()) && s.getStatus() != TaskStatus.FINISHED)
-                .map(this::snapshot).toList();
+                .toList();
     }
 }

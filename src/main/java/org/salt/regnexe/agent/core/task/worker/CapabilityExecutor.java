@@ -225,7 +225,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 } catch (AgentStoppedException | AgentAbortException e) {
                     throw e;
                 } catch (Exception e) {
-                    org.salt.regnexe.agent.core.task.store.TaskConflictException.rethrowIfPresent(e);
                     if (attempt >= MAX_EXECUTE_RETRIES) throw e;
                     log.warn("Round {}: execute call failed on attempt {}/{}, retrying: {}",
                             round, attempt + 1, MAX_EXECUTE_RETRIES + 1, e.getMessage());
@@ -256,7 +255,6 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                     "FAILED | " + e.getMessage()).inSpan(phaseSpan, null));
             log.warn("Round {}: execution aborted: {}", state.getCurrentRound(), e.getMessage());
         } catch (Exception e) {
-            org.salt.regnexe.agent.core.task.store.TaskConflictException.rethrowIfPresent(e);
             output.setStatus(ExecutionStatus.FAILED);
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName() + " (no message)";
             output.setFinalText(msg);
