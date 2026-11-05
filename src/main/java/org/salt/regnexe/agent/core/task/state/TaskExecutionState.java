@@ -30,6 +30,9 @@ public class TaskExecutionState {
 
     // --- Fixed at creation ---
 
+    /** Store revision: zero for an unsaved task; advanced only by a successful save. */
+    private long version;
+
     private String taskId;
 
     private String sessionId;

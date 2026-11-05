@@ -4,7 +4,7 @@
 
   <groupId>io.github.flower-trees</groupId>
   <artifactId>regnexe-agent</artifactId>
-  <version>0.1.3</version>
+  <version>0.1.4-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>regnexe-agent</name>
@@ -171,6 +171,7 @@
               <failIfNoTests>true</failIfNoTests>
               <includes>
                 <include>**/LoopSpansTest.java</include>
+                <include>**/TaskResumeSafetyTest.java</include>
                 <include>**/CompositeEventListenerTest.java</include>
                 <include>**/SimpleMarketplaceTest.java</include>
                 <include>**/PluginCacheInstallerTest.java</include>
