@@ -16,27 +16,13 @@ package org.salt.regnexe.agent.core.task.worker;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
-import org.salt.regnexe.agent.core.common.enums.ReflectionAction;
-import org.salt.regnexe.agent.core.common.enums.TaskStatus;
-import org.salt.regnexe.agent.core.event.AgentEvent;
-import org.salt.regnexe.agent.core.event.AgentEventListener;
-import org.salt.regnexe.agent.core.event.EventType;
-import org.salt.regnexe.agent.core.event.LoopSpans;
-import org.salt.regnexe.agent.core.event.SpanIds;
-import org.salt.regnexe.agent.core.llm.ModelProvider;
-import org.salt.regnexe.agent.core.llm.ModelSpec;
-import org.salt.regnexe.agent.core.common.util.RoundRecords;
-import org.salt.regnexe.agent.core.task.state.RoundRecord;
-import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
-import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
-import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
-import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
-import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
-import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
@@ -44,10 +30,25 @@ import org.salt.jlangchain.core.message.MessageType;
 import org.salt.jlangchain.core.parser.StrOutputParser;
 import org.salt.jlangchain.core.parser.generation.ChatGeneration;
 import org.salt.jlangchain.core.prompt.value.ChatPromptValue;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.function.Consumer;
+import org.salt.regnexe.agent.core.common.enums.ReflectionAction;
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.util.RoundRecords;
+import org.salt.regnexe.agent.core.event.AgentEvent;
+import org.salt.regnexe.agent.core.event.AgentEventListener;
+import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
+import org.salt.regnexe.agent.core.event.SpanIds;
+import org.salt.regnexe.agent.core.llm.ModelProvider;
+import org.salt.regnexe.agent.core.llm.ModelSpec;
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
+import org.salt.regnexe.agent.core.task.state.RoundRecord;
+import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
+import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
+import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
+import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
+import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
+import org.salt.regnexe.agent.core.task.store.TaskStore;
 
 /**
  * Evaluates the execution result and decides whether to FINISH, CONTINUE, or ESCALATE.
@@ -209,7 +210,10 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
 
         switch (decision.getAction()) {
             case FINISH   -> state.setStatus(TaskStatus.FINISHED);
-            case ESCALATE -> { state.setStatus(TaskStatus.ESCALATED); state.setTerminationReason("INCOMPLETE"); }
+            case ESCALATE -> {
+                state.setStatus(TaskStatus.ESCALATED);
+                state.setTerminationReason("INCOMPLETE");
+            }
             case CONTINUE -> {} // remain RUNNING
         }
         state.setUpdatedAt(System.currentTimeMillis());
@@ -284,7 +288,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
      * expected, not a sign anything went wrong — only flag it when nothing was ever actually run.
      */
     private ReflectionDecision evaluateGuardRules(RoundRecord round, TaskExecutionState state,
-            org.salt.regnexe.agent.core.marketplace.Marketplace marketplace) {
+            Marketplace marketplace) {
         PlanOutput plan = round.getPlan();
 
         boolean capsSelected = plan != null
@@ -297,7 +301,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         // Keep the no-call guard for real tools/sub-agents and unresolved capabilities.
         boolean requiresCall = capsSelected && plan.getSelectedCapabilityIds().stream().anyMatch(id -> {
             var cap = marketplace == null ? null : marketplace.resolveDescriptor(id);
-            return cap == null || cap.getType() != org.salt.regnexe.agent.core.marketplace.capability.CapabilityType.SKILL;
+            return cap == null || cap.getType() != CapabilityType.SKILL;
         });
         if (requiresCall && noToolsRan && !hasPriorEvidence) {
             int capsCount = plan.getSelectedCapabilityIds().size();

@@ -14,6 +14,9 @@
 
 package org.salt.regnexe.agent.core.task.worker;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
@@ -29,9 +32,6 @@ import org.salt.regnexe.agent.core.task.state.capability.CapabilitySearchResult;
 import org.salt.regnexe.agent.core.task.state.capability.SearchQuery;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Queries the Marketplace for capability candidates matching the current goal.
@@ -102,7 +102,7 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
             bus.putTransmit(ContextBusKeys.CANDIDATES, result.getCandidates());
 
             String names = result.getCandidates().stream()
-                    .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
+                    .map(c -> c.getName()).collect(Collectors.joining(", "));
             listener.dispatch(AgentEvent.of(state.getTaskId(), roundNumber, EventType.SEARCH_COMPLETED,
                     "Found " + result.getCandidates().size() + " capabilities: " + names).inSpan(phaseSpan, runSpan));
             log.debug("Round {}: searched, found {} candidates",

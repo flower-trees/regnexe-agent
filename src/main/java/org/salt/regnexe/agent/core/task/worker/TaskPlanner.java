@@ -15,10 +15,25 @@
 package org.salt.regnexe.agent.core.task.worker;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowInstance;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
+import org.salt.jlangchain.core.ChainActor;
+import org.salt.jlangchain.core.history.HistoryInfos;
+import org.salt.jlangchain.core.llm.BaseChatModel;
+import org.salt.jlangchain.core.message.BaseMessage;
+import org.salt.jlangchain.core.message.MessageType;
+import org.salt.jlangchain.core.parser.StrOutputParser;
+import org.salt.jlangchain.core.parser.generation.ChatGeneration;
+import org.salt.jlangchain.core.prompt.value.ChatPromptValue;
 import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.common.util.RoundRecords;
@@ -36,20 +51,6 @@ import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
 import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 import org.salt.regnexe.agent.core.task.state.reflection.ReflectionHint;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
-import org.salt.jlangchain.core.ChainActor;
-import org.salt.jlangchain.core.history.HistoryInfos;
-import org.salt.jlangchain.core.llm.BaseChatModel;
-import org.salt.jlangchain.core.message.BaseMessage;
-import org.salt.jlangchain.core.message.MessageType;
-import org.salt.jlangchain.core.parser.StrOutputParser;
-import org.salt.jlangchain.core.parser.generation.ChatGeneration;
-import org.salt.jlangchain.core.prompt.value.ChatPromptValue;
-
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.function.Consumer;
 
 /**
  * Reads candidates from Searcher and produces a PlanOutput
@@ -165,7 +166,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         int round = state.getCurrentRound();
 
         String candidateNames = candidates == null ? "" : candidates.stream()
-                .map(c -> c.getName()).collect(java.util.stream.Collectors.joining(", "));
+                .map(c -> c.getName()).collect(Collectors.joining(", "));
         String phaseSpan = SpanIds.next();
         LoopSpans spans = new LoopSpans(() -> phaseSpan);
         listener.dispatch(AgentEvent.of(taskId, round, EventType.PLAN_STARTED,
@@ -452,7 +453,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
         }
         Set<String> validIds = candidates.stream()
                 .map(CapabilityCandidate::getCapabilityId)
-                .collect(java.util.stream.Collectors.toSet());
+                .collect(Collectors.toSet());
         return parsed.getSelectedCapabilityIds().stream()
                 .filter(id -> !validIds.contains(id))
                 .toList();
@@ -504,7 +505,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 + state.getRequest().getGoal());
         List<String> allIds = candidates == null ? List.of() :
                 candidates.stream().map(CapabilityCandidate::getCapabilityId)
-                        .collect(java.util.stream.Collectors.toList());
+                        .collect(Collectors.toList());
         minimal.setSelectedCapabilityIds(allIds);
         minimal.setFinalAnswerRequirements(List.of());
         return minimal;
@@ -516,7 +517,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             plan.setSelectedCapabilityIds(List.of());
         }
         if (plan.getCapabilityInputDescriptions() == null) {
-            plan.setCapabilityInputDescriptions(java.util.Collections.emptyMap());
+            plan.setCapabilityInputDescriptions(Collections.emptyMap());
         }
         if (plan.getFinalAnswerRequirements() == null) {
             plan.setFinalAnswerRequirements(List.of());

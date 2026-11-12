@@ -14,8 +14,24 @@
 
 package org.salt.regnexe.agent.core;
 
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
+import org.salt.jlangchain.core.ChainActor;
+import org.salt.jlangchain.core.agent.memory.AgentContext;
+import org.salt.jlangchain.core.agent.memory.FullContext;
+import org.salt.jlangchain.core.history.memory.ConversationMemory;
+import org.salt.jlangchain.core.history.storage.ConversationStorage;
+import org.salt.jlangchain.core.history.storage.InMemoryConversationStorage;
+import org.salt.jlangchain.core.llm.BaseChatModel;
+import org.salt.jlangchain.core.skill.SkillConfig;
+import org.salt.jlangchain.core.subagent.SubAgentConfig;
+import org.salt.jlangchain.rag.tools.Tool;
 import org.salt.regnexe.agent.core.event.AgentEventListener;
 import org.salt.regnexe.agent.core.event.CompositeEventListener;
 import org.salt.regnexe.agent.core.event.TokenAggregatingEventListener;
@@ -23,9 +39,9 @@ import org.salt.regnexe.agent.core.llm.DefaultModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelProvider;
 import org.salt.regnexe.agent.core.llm.ModelSpec;
 import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
 import org.salt.regnexe.agent.core.marketplace.Marketplace;
 import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
 import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
 import org.salt.regnexe.agent.core.marketplace.scope.EnabledStateLoader;
 import org.salt.regnexe.agent.core.marketplace.scope.Scope;
@@ -33,27 +49,14 @@ import org.salt.regnexe.agent.core.marketplace.scope.ScopeResolver;
 import org.salt.regnexe.agent.core.marketplace.scope.ScopedEnabledState;
 import org.salt.regnexe.agent.core.task.DefaultResultComposer;
 import org.salt.regnexe.agent.core.task.ResultComposer;
+import org.salt.regnexe.agent.core.task.state.ExecutionBudget;
 import org.salt.regnexe.agent.core.task.store.InMemoryTaskStore;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.regnexe.agent.core.task.worker.CapabilityExecutor;
 import org.salt.regnexe.agent.core.task.worker.CapabilitySearcher;
 import org.salt.regnexe.agent.core.task.worker.Reflector;
 import org.salt.regnexe.agent.core.task.worker.TaskPlanner;
-import org.salt.jlangchain.core.ChainActor;
-import org.salt.jlangchain.core.agent.memory.AgentContext;
-import org.salt.jlangchain.core.llm.BaseChatModel;
-import org.salt.jlangchain.core.agent.memory.FullContext;
-import org.salt.jlangchain.core.history.memory.ConversationMemory;
-import org.salt.jlangchain.core.history.storage.ConversationStorage;
-import org.salt.jlangchain.core.history.storage.InMemoryConversationStorage;
-import org.salt.jlangchain.core.skill.SkillConfig;
-import org.salt.jlangchain.core.subagent.SubAgentConfig;
-import org.salt.jlangchain.rag.tools.Tool;
 import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
 
 /**
  * Spring-managed factory for {@link RegnexeAgent} instances.
@@ -103,7 +106,7 @@ public class RegnexeAgentBuilder {
         return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model);
     }
 
-    public Builder withDefaultModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+    public Builder withDefaultModel(String vendor, String model, Map<String, Object> kwargs) {
         return new Builder(flowEngine, chainActor).withDefaultModel(vendor, model, kwargs);
     }
 
@@ -217,7 +220,7 @@ public class RegnexeAgentBuilder {
         private Marketplace marketplace;
         private TaskStore taskStore;
         private ResultComposer resultComposer;
-        private org.salt.regnexe.agent.core.task.state.ExecutionBudget executionBudget;
+        private ExecutionBudget executionBudget;
 
         private int maxRounds = DEFAULT_MAX_ROUNDS;
         private final List<AgentEventListener> eventListeners = new ArrayList<>();
@@ -230,11 +233,11 @@ public class RegnexeAgentBuilder {
         private int maxContextOutputChars = 2000;
         private boolean verbose = false;
         private ConversationMemory sessionMemory;
-        private java.nio.file.Path claudeCompatWorkspace;
+        private Path claudeCompatWorkspace;
         private String projectMemory;
         // Names of tools registered via withTool() — see ContextBusKeys.BASE_TOOL_NAMES javadoc.
         // LinkedHashSet: dedupes across repeated/varargs withTool() calls while keeping registration order.
-        private final java.util.Set<String> baseToolNames = new java.util.LinkedHashSet<>();
+        private final Set<String> baseToolNames = new LinkedHashSet<>();
 
         Builder(FlowEngine flowEngine, ChainActor chainActor) {
             this.flowEngine = flowEngine;
@@ -259,7 +262,7 @@ public class RegnexeAgentBuilder {
         /** Same as {@link #withDefaultModel(String, String)}, plus vendor-specific extra request
          * params (e.g. {@code Map.of("thinking", Map.of("type", "disabled"))}) — see
          * {@link ModelSpec#of(String, String, java.util.Map)}'s javadoc. */
-        public Builder withDefaultModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+        public Builder withDefaultModel(String vendor, String model, Map<String, Object> kwargs) {
             this.defaultModel = ModelSpec.of(vendor, model, kwargs);
             return this;
         }
@@ -289,7 +292,7 @@ public class RegnexeAgentBuilder {
         }
 
         /** Same as {@link #withPlannerModel(String, String)}, plus vendor-specific extra request params. */
-        public Builder withPlannerModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+        public Builder withPlannerModel(String vendor, String model, Map<String, Object> kwargs) {
             this.plannerModel = ModelSpec.of(vendor, model, kwargs);
             return this;
         }
@@ -307,7 +310,7 @@ public class RegnexeAgentBuilder {
         }
 
         /** Same as {@link #withReflectorModel(String, String)}, plus vendor-specific extra request params. */
-        public Builder withReflectorModel(String vendor, String model, java.util.Map<String, Object> kwargs) {
+        public Builder withReflectorModel(String vendor, String model, Map<String, Object> kwargs) {
             this.reflectorModel = ModelSpec.of(vendor, model, kwargs);
             return this;
         }
@@ -419,7 +422,7 @@ public class RegnexeAgentBuilder {
          * (typically) your plugin/skill directory tree, so a skill-authoring skill can see and
          * edit existing skills instead of starting from an empty sandbox every time.
          */
-        public Builder withClaudeCompatWorkspace(java.nio.file.Path workspace) {
+        public Builder withClaudeCompatWorkspace(Path workspace) {
             this.claudeCompatWorkspace = workspace;
             return this;
         }
@@ -536,7 +539,7 @@ public class RegnexeAgentBuilder {
          * populated yet (nothing to enable/disable). {@code enabledYmlByScope} entries with a
          * null path are skipped.
          */
-        public Builder withEnabledState(Map<Scope, java.nio.file.Path> enabledYmlByScope, List<Scope> priorityOrder) {
+        public Builder withEnabledState(Map<Scope, Path> enabledYmlByScope, List<Scope> priorityOrder) {
             if (this.marketplace == null) {
                 return this;
             }
@@ -544,7 +547,7 @@ public class RegnexeAgentBuilder {
             ScopeResolver resolver = new ScopeResolver();
             List<ScopedEnabledState> layers = new ArrayList<>();
             for (Scope scope : priorityOrder) {
-                java.nio.file.Path path = enabledYmlByScope.get(scope);
+                Path path = enabledYmlByScope.get(scope);
                 if (path == null) continue;
                 layers.add(new ScopedEnabledState(scope, loader.load(path)));
             }
@@ -615,7 +618,7 @@ public class RegnexeAgentBuilder {
         }
 
         /** Opt-in per-task evaluation caps; existing defaults are unchanged when absent. */
-        public Builder withExecutionBudget(org.salt.regnexe.agent.core.task.state.ExecutionBudget budget) {
+        public Builder withExecutionBudget(ExecutionBudget budget) {
             this.executionBudget = budget == null ? null : budget.snapshot();
             return this;
         }

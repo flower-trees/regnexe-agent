@@ -14,13 +14,12 @@
 
 package org.salt.regnexe.agent.core.task.state;
 
+import java.util.List;
+import java.util.Map;
 import lombok.Data;
 import org.salt.jlangchain.core.agent.memory.AgentStep;
 import org.salt.regnexe.agent.core.common.enums.TaskStatus;
 import org.salt.regnexe.agent.core.task.state.capability.CapabilitySearchResult;
-
-import java.util.List;
-import java.util.Map;
 
 /**
  * The task ledger. Tracks every round and accumulates search results across the loop.

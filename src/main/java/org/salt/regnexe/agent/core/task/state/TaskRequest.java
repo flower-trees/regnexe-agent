@@ -14,9 +14,8 @@
 
 package org.salt.regnexe.agent.core.task.state;
 
-import lombok.Data;
-
 import java.util.Map;
+import lombok.Data;
 
 /**
  * Immutable task input. All roles can read it; no role may modify it.

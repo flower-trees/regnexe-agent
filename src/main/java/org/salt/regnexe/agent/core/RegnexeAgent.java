@@ -14,35 +14,21 @@
 
 package org.salt.regnexe.agent.core;
 
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.FlowEngine;
 import org.salt.function.flow.FlowInstance;
-import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
-import org.salt.regnexe.agent.core.common.enums.TaskStatus;
-import org.salt.regnexe.agent.core.event.AgentEvent;
-import org.salt.regnexe.agent.core.event.AgentEventListener;
-import org.salt.regnexe.agent.core.event.EventType;
-import org.salt.regnexe.agent.core.event.LoopSpans;
-import org.salt.regnexe.agent.core.event.SpanIds;
-import org.salt.regnexe.agent.core.llm.ModelProvider;
-import org.salt.regnexe.agent.core.llm.ModelSpec;
-import org.salt.regnexe.agent.core.marketplace.Marketplace;
-import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.task.AgentResult;
-import org.salt.regnexe.agent.core.task.ResultComposer;
-import org.salt.regnexe.agent.core.task.state.RoundRecord;
-import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
-import org.salt.regnexe.agent.core.task.state.TaskRequest;
-import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
-import org.salt.regnexe.agent.core.task.store.TaskStore;
-import org.salt.regnexe.agent.core.task.worker.CapabilityExecutor;
-import org.salt.regnexe.agent.core.task.worker.CapabilitySearcher;
-import org.salt.regnexe.agent.core.task.worker.ContextBusKeys;
-import org.salt.regnexe.agent.core.task.worker.Reflector;
-import org.salt.regnexe.agent.core.task.worker.TaskPlanner;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.agent.memory.AgentContext;
-import org.salt.regnexe.agent.core.common.util.TextCompressor;
 import org.salt.jlangchain.core.history.HistoryInfos;
 import org.salt.jlangchain.core.history.memory.ConversationMemory;
 import org.salt.jlangchain.core.history.memory.periodic.PeriodicConversationSummaryMemory;
@@ -51,17 +37,30 @@ import org.salt.jlangchain.core.history.storage.ConversationStorage;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
 import org.salt.jlangchain.core.message.MessageType;
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.util.TextCompressor;
+import org.salt.regnexe.agent.core.event.AgentEvent;
+import org.salt.regnexe.agent.core.event.AgentEventListener;
+import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.SpanIds;
+import org.salt.regnexe.agent.core.llm.ModelProvider;
+import org.salt.regnexe.agent.core.llm.ModelSpec;
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
+import org.salt.regnexe.agent.core.task.AgentResult;
+import org.salt.regnexe.agent.core.task.ResultComposer;
+import org.salt.regnexe.agent.core.task.state.ExecutionBudget;
+import org.salt.regnexe.agent.core.task.state.RoundRecord;
+import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
+import org.salt.regnexe.agent.core.task.state.TaskRequest;
+import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
+import org.salt.regnexe.agent.core.task.store.TaskStore;
+import org.salt.regnexe.agent.core.task.worker.BudgetedChatModel;
+import org.salt.regnexe.agent.core.task.worker.CapabilityExecutor;
+import org.salt.regnexe.agent.core.task.worker.CapabilitySearcher;
+import org.salt.regnexe.agent.core.task.worker.ContextBusKeys;
+import org.salt.regnexe.agent.core.task.worker.Reflector;
 import org.salt.regnexe.agent.core.task.worker.RequiredSkillPolicy;
-import org.salt.jlangchain.rag.tools.Tool;
-
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
+import org.salt.regnexe.agent.core.task.worker.TaskPlanner;
 
 /**
  * RegnexeAgent Runtime — orchestrates the Search→Plan→Execute→Reflect loop.
@@ -96,7 +95,7 @@ public class RegnexeAgent {
     private final TaskStore taskStore;
     private final ResultComposer resultComposer;
     private final int maxRounds;
-    private final org.salt.regnexe.agent.core.task.state.ExecutionBudget executionBudget;
+    private final ExecutionBudget executionBudget;
     private final AgentEventListener eventListener;
     private final ConversationStorage sessionStorage;
     private final int sessionBufferSize;
@@ -109,7 +108,7 @@ public class RegnexeAgent {
     private final ConversationMemory sessionMemory;
     private final Path claudeCompatWorkspace;
     private final String projectMemory;
-    private final java.util.Set<String> baseToolNames;
+    private final Set<String> baseToolNames;
 
     /** Set at the start of each execute(); checked by pause(). */
     private volatile AtomicBoolean activeStopSignal;
@@ -140,8 +139,8 @@ public class RegnexeAgent {
                 ConversationMemory sessionMemory,
                 Path claudeCompatWorkspace,
                 String projectMemory,
-                java.util.Set<String> baseToolNames,
-                org.salt.regnexe.agent.core.task.state.ExecutionBudget executionBudget) {
+                Set<String> baseToolNames,
+                ExecutionBudget executionBudget) {
         this.executionBudget = executionBudget == null ? null : executionBudget.snapshot();
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
@@ -169,7 +168,7 @@ public class RegnexeAgent {
         this.sessionMemory = sessionMemory;
         this.claudeCompatWorkspace = claudeCompatWorkspace;
         this.projectMemory = projectMemory;
-        this.baseToolNames = baseToolNames != null ? baseToolNames : java.util.Set.of();
+        this.baseToolNames = baseToolNames != null ? baseToolNames : Set.of();
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -224,7 +223,7 @@ public class RegnexeAgent {
     public AgentResult resumeTask(String sessionId, String taskId, String supplementInput) {
         TaskExecutionState state = taskStore.load(taskId)
                 .orElseThrow(() -> new IllegalStateException("Task no longer exists: " + taskId));
-        if (!java.util.Objects.equals(sessionId, state.getSessionId())) {
+        if (!Objects.equals(sessionId, state.getSessionId())) {
             throw new IllegalStateException("Task does not belong to session: " + sessionId);
         }
         if (state.getStatus() == TaskStatus.FINISHED) {
@@ -238,7 +237,7 @@ public class RegnexeAgent {
         }
         if (state.getRequest().getExecutionBudget() != null) {
             state.getRequest().getExecutionBudget().snapshot();
-            org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.rethrowLimit(state);
+            BudgetedChatModel.rethrowLimit(state);
         }
         state.setTerminationReason(null);
         if (state.getCurrentRound() >= state.getMaxRounds()) {
@@ -298,7 +297,7 @@ public class RegnexeAgent {
     // ── Loop ─────────────────────────────────────────────────────────────────
 
     private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory, String runSpan) {
-        try (var budgetScope = org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.scope(state)) {
+        try (var budgetScope = BudgetedChatModel.scope(state)) {
             AtomicBoolean stopSignal = new AtomicBoolean(false);
             this.activeStopSignal = stopSignal;
 
@@ -374,7 +373,7 @@ public class RegnexeAgent {
                         ? displayGoal : state.getRequest().getGoal();
                 try {
                     storeSessionRound(state.getSessionId(), humanTurn, finalText);
-                } catch (org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.LimitExceeded e) {
+                } catch (BudgetedChatModel.LimitExceeded e) {
                     state.setStatus(TaskStatus.TIMEOUT);
                 }
             }
@@ -491,8 +490,8 @@ public class RegnexeAgent {
                     .appId("0").userId("0").sessionId(sessionId)
                     .maxSize(sessionCompactPeriod)
                     .storage(sessionStorage)
-                    .llm(org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.wrap(llmProvider.provide(defaultModel),
-                            org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.currentTask(), "summary"))
+                    .llm(BudgetedChatModel.wrap(llmProvider.provide(defaultModel),
+                            BudgetedChatModel.currentTask(), "summary"))
                     .build();
         }
         HistoryInfos turn = HistoryInfos.builder()
@@ -506,8 +505,8 @@ public class RegnexeAgent {
     }
 
     private String compressForSession(String text, int targetChars) {
-        BaseChatModel llm = org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.wrap(llmProvider.provide(defaultModel),
-                org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.currentTask(), "summary");
+        BaseChatModel llm = BudgetedChatModel.wrap(llmProvider.provide(defaultModel),
+                BudgetedChatModel.currentTask(), "summary");
         return TextCompressor.compress(text, targetChars, chainActor, llm);
     }
 }

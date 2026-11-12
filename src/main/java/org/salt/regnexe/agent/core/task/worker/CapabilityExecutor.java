@@ -14,29 +14,18 @@
 
 package org.salt.regnexe.agent.core.task.worker;
 
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
 import org.salt.function.flow.context.IContextBus;
 import org.salt.function.flow.node.FlowNode;
-import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
-import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
-import org.salt.regnexe.agent.core.common.enums.TaskStatus;
-import org.salt.regnexe.agent.core.common.enums.TodoStatus;
-import org.salt.regnexe.agent.core.common.util.RoundRecords;
-import org.salt.regnexe.agent.core.event.AgentEvent;
-import org.salt.regnexe.agent.core.event.AgentEventListener;
-import org.salt.regnexe.agent.core.event.EventType;
-import org.salt.regnexe.agent.core.event.LoopSpans;
-import org.salt.regnexe.agent.core.event.SpanIds;
-import org.salt.regnexe.agent.core.llm.ModelProvider;
-import org.salt.regnexe.agent.core.llm.ModelSpec;
-import org.salt.regnexe.agent.core.marketplace.Marketplace;
-import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
-import org.salt.regnexe.agent.core.task.state.TodoItem;
-import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
-import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
-import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
-import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.jlangchain.core.ChainActor;
 import org.salt.jlangchain.core.agent.AgentAbortException;
 import org.salt.jlangchain.core.agent.AgentStoppedException;
@@ -55,15 +44,26 @@ import org.salt.jlangchain.core.subagent.SubAgent;
 import org.salt.jlangchain.core.subagent.SubAgentConfig;
 import org.salt.jlangchain.rag.tools.Tool;
 import org.salt.jlangchain.utils.JsonUtil;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
+import org.salt.regnexe.agent.core.common.enums.ExecutionStatus;
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.common.enums.TodoStatus;
+import org.salt.regnexe.agent.core.common.util.RoundRecords;
+import org.salt.regnexe.agent.core.event.AgentEvent;
+import org.salt.regnexe.agent.core.event.AgentEventListener;
+import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.event.LoopSpans;
+import org.salt.regnexe.agent.core.event.SpanIds;
+import org.salt.regnexe.agent.core.llm.ModelProvider;
+import org.salt.regnexe.agent.core.llm.ModelSpec;
+import org.salt.regnexe.agent.core.marketplace.Marketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
+import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
+import org.salt.regnexe.agent.core.task.state.TodoItem;
+import org.salt.regnexe.agent.core.task.state.execution.ExecutionOutput;
+import org.salt.regnexe.agent.core.task.state.execution.ToolExecutionRecord;
+import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
+import org.salt.regnexe.agent.core.task.store.TaskStore;
 
 /**
  * Delegates plan execution to McpAgentExecutor.
@@ -126,7 +126,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         // (mcp_tool/skill/subagent). Names not present here (e.g. a sub-agent's own tools) get
         // no type prefix.
         Map<String, CapabilityType> typeByName = new HashMap<>();
-        java.nio.file.Path claudeCompatWorkspace = bus.getTransmit(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE);
+        Path claudeCompatWorkspace = bus.getTransmit(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE);
         String phaseSpan = SpanIds.next();
         LoopSpans spans = new LoopSpans(() -> phaseSpan);
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, spec -> BudgetedChatModel.wrap(llmProvider.provide(spec), state, "subagent"), mcpTools, skillSystemPrompts,
@@ -283,7 +283,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             log.warn("Round {}: execution aborted: {}", state.getCurrentRound(), e.getMessage());
         } catch (Exception e) {
             if (state.getRequest().getExecutionBudget() != null) {
-                state.setTerminationReason("MODEL_ERROR"); state.setStatus(TaskStatus.FAILED);
+                state.setTerminationReason("MODEL_ERROR");
+                state.setStatus(TaskStatus.FAILED);
             }
             output.setStatus(ExecutionStatus.FAILED);
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName() + " (no message)";
@@ -374,7 +375,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                      String taskId, int round, boolean verbose,
                                      List<ToolExecutionRecord> toolExecutions,
                                      Map<String, CapabilityType> typeByName,
-                                     java.nio.file.Path claudeCompatWorkspace,
+                                     Path claudeCompatWorkspace,
                                      Set<String> baseToolNames, boolean requiredSkillOnly) {
         if (marketplace == null || capIds == null) return;
 
@@ -440,7 +441,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                         if (cfg.isInheritModel() || cfg.getModel() == null) {
                             ab.llm(llm);
                         } else {
-                            java.util.Map<String, Object> capKwargs = cap.getModelKwargs();
+                            Map<String, Object> capKwargs = cap.getModelKwargs();
                             ab.llmFactory(name -> {
                                 int sep = name.indexOf(':');
                                 ModelSpec spec = sep > 0

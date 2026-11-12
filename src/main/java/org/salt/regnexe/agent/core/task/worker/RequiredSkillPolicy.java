@@ -1,7 +1,7 @@
 package org.salt.regnexe.agent.core.task.worker;
 
-import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.List;
 import org.salt.regnexe.agent.core.marketplace.Marketplace;
 import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
 import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
@@ -11,11 +11,14 @@ import org.salt.regnexe.agent.core.task.state.plan.PlanOutput;
 
 /** Single explicit Skill constraint. No standalone Skill executor or silent Auto fallback. */
 public final class RequiredSkillPolicy {
-    private RequiredSkillPolicy() {}
+    private RequiredSkillPolicy() {
+    }
 
     public static CapabilityDescriptor validate(TaskRequest request, Marketplace marketplace) {
         String id = request.getRequiredSkillId();
-        if (id == null) return null;
+        if (id == null) {
+            return null;
+        }
         CapabilityDescriptor cap = marketplace == null ? null : marketplace.resolveDescriptor(id);
         if (id.isBlank() || cap == null) {
             throw new IllegalArgumentException("Unknown skill or disabled skill: " + id);
@@ -40,7 +43,9 @@ public final class RequiredSkillPolicy {
 
     public static void enforcePlan(TaskRequest request, PlanOutput plan) {
         String id = request.getRequiredSkillId();
-        if (id == null) return;
+        if (id == null) {
+            return;
+        }
         plan.setSelectedCapabilityIds(List.of(id));
         var descriptions = new LinkedHashMap<String, String>();
         String input = plan.getCapabilityInputDescriptions() == null ? null

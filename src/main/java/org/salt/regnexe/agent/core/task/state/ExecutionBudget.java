@@ -10,9 +10,12 @@ public class ExecutionBudget {
     private boolean retryExecution;
 
     public ExecutionBudget snapshot() {
-        if (hardMaxIterations < 0 || maxModelCalls < 0) throw new IllegalArgumentException("Budget caps cannot be negative");
+        if (hardMaxIterations < 0 || maxModelCalls < 0) {
+            throw new IllegalArgumentException("Budget caps cannot be negative");
+        }
         ExecutionBudget copy = new ExecutionBudget();
-        copy.hardMaxIterations = hardMaxIterations; copy.maxModelCalls = maxModelCalls;
+        copy.hardMaxIterations = hardMaxIterations;
+        copy.maxModelCalls = maxModelCalls;
         copy.retryExecution = retryExecution;
         return copy;
     }

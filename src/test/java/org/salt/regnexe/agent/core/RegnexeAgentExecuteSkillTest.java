@@ -14,32 +14,32 @@
 
 package org.salt.regnexe.agent.core;
 
-import org.junit.Assert;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.salt.jlangchain.core.history.HistoryInfos;
-import org.salt.jlangchain.core.history.memory.ConversationMemory;
-import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
-import org.salt.regnexe.agent.core.common.enums.TaskStatus;
-import org.salt.regnexe.agent.core.event.AgentEvent;
-import org.salt.regnexe.agent.core.event.AgentEventListener;
-import org.salt.regnexe.agent.core.event.EventType;
-import org.salt.regnexe.agent.core.llm.Vendor;
-import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
-import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
-import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
-import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
-import org.salt.regnexe.agent.core.task.AgentResult;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.junit4.SpringRunner;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import org.junit.Assert;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.salt.jlangchain.core.history.HistoryInfos;
+import org.salt.jlangchain.core.history.memory.ConversationMemory;
+import org.salt.jlangchain.rag.tools.Tool;
+import org.salt.regnexe.agent.core.common.enums.TaskStatus;
+import org.salt.regnexe.agent.core.event.AgentEvent;
+import org.salt.regnexe.agent.core.event.AgentEventListener;
+import org.salt.regnexe.agent.core.event.EventType;
+import org.salt.regnexe.agent.core.llm.Vendor;
+import org.salt.regnexe.agent.core.marketplace.SimpleMarketplace;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityDescriptor;
+import org.salt.regnexe.agent.core.marketplace.capability.CapabilityType;
+import org.salt.regnexe.agent.core.marketplace.loader.DefaultPluginManager;
+import org.salt.regnexe.agent.core.marketplace.plugin.PluginDescriptor;
+import org.salt.regnexe.agent.core.task.AgentResult;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.junit4.SpringRunner;
 
 /**
  * Covers {@link RegnexeAgent#executeSkill} — explicit Skill invocation through the shared
@@ -85,7 +85,7 @@ public class RegnexeAgentExecuteSkillTest {
                         .capabilityId("tools-only.noop")
                         .pluginId("tools-only")
                         .type(CapabilityType.MCP_TOOL)
-                        .tool(org.salt.jlangchain.rag.tools.Tool.builder()
+                        .tool(Tool.builder()
                                 .name("noop").description("does nothing").params("x: String")
                                 .func(x -> "ok")
                                 .build())
@@ -267,7 +267,8 @@ public class RegnexeAgentExecuteSkillTest {
         try (var walk = Files.walk(dir)) {
             walk.sorted(Comparator.reverseOrder())
                 .forEach(p -> {
-                    try { Files.delete(p); } catch (IOException ignored) {}
+                    try { Files.delete(p);
+                    } catch (IOException ignored) {}
                 });
         } catch (IOException ignored) {}
     }
