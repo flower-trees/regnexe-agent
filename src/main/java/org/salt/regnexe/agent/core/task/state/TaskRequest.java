@@ -32,6 +32,8 @@ public class TaskRequest {
     /** Optional single Skill constraint; persisted across rounds, pause and resume. */
     private String requiredSkillId;
 
+    private ExecutionBudget executionBudget;
+
     /**
      * Structured inputs attached to the task
      */

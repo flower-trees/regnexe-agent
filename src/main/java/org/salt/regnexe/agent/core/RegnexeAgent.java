@@ -96,6 +96,7 @@ public class RegnexeAgent {
     private final TaskStore taskStore;
     private final ResultComposer resultComposer;
     private final int maxRounds;
+    private final org.salt.regnexe.agent.core.task.state.ExecutionBudget executionBudget;
     private final AgentEventListener eventListener;
     private final ConversationStorage sessionStorage;
     private final int sessionBufferSize;
@@ -139,7 +140,9 @@ public class RegnexeAgent {
                 ConversationMemory sessionMemory,
                 Path claudeCompatWorkspace,
                 String projectMemory,
-                java.util.Set<String> baseToolNames) {
+                java.util.Set<String> baseToolNames,
+                org.salt.regnexe.agent.core.task.state.ExecutionBudget executionBudget) {
+        this.executionBudget = executionBudget == null ? null : executionBudget.snapshot();
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -178,6 +181,8 @@ public class RegnexeAgent {
     }
 
     public AgentResult execute(TaskRequest request) {
+        if (request.getExecutionBudget() == null && executionBudget != null) request.setExecutionBudget(executionBudget.snapshot());
+        else if (request.getExecutionBudget() != null) request.setExecutionBudget(request.getExecutionBudget().snapshot());
         RequiredSkillPolicy.validate(request, marketplace);
         TaskExecutionState state = initState(request);
         taskStore.save(state);
@@ -231,6 +236,11 @@ public class RegnexeAgent {
             state.getRequest().setGoal((goal == null || goal.isBlank() ? "" : goal + "\n\n")
                     + "[Resumed with additional instruction]: " + supplementInput);
         }
+        if (state.getRequest().getExecutionBudget() != null) {
+            state.getRequest().getExecutionBudget().snapshot();
+            org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.rethrowLimit(state);
+        }
+        state.setTerminationReason(null);
         if (state.getCurrentRound() >= state.getMaxRounds()) {
             state.setMaxRounds(state.getMaxRounds() + RESUME_ROUND_MARGIN);
         }
@@ -288,85 +298,100 @@ public class RegnexeAgent {
     // ── Loop ─────────────────────────────────────────────────────────────────
 
     private AgentResult runLoop(TaskExecutionState state, List<HistoryInfos> sessionHistory, String runSpan) {
-        AtomicBoolean stopSignal = new AtomicBoolean(false);
-        this.activeStopSignal = stopSignal;
+        try (var budgetScope = org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.scope(state)) {
+            AtomicBoolean stopSignal = new AtomicBoolean(false);
+            this.activeStopSignal = stopSignal;
 
-        Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory);
-        transmitMap.put(ContextBusKeys.RUN_SPAN_ID, runSpan);
+            Map<String, Object> transmitMap = buildTransmitMap(state, stopSignal, sessionHistory);
+            transmitMap.put(ContextBusKeys.RUN_SPAN_ID, runSpan);
 
-        FlowInstance flowInstance = flowEngine.builder()
-                .loop(
-                        i -> state.getStatus() == TaskStatus.RUNNING && !stopSignal.get()
-                                && state.getCurrentRound() < state.getMaxRounds(),
-                        capabilitySearcher, taskPlanner, capabilityExecutor, reflector
-                )
-                .build();
+            FlowInstance flowInstance = flowEngine.builder()
+                    .loop(
+                            i -> state.getStatus() == TaskStatus.RUNNING && !stopSignal.get()
+                                    && state.getCurrentRound() < state.getMaxRounds(),
+                            capabilitySearcher, taskPlanner, capabilityExecutor, reflector
+                    )
+                    .build();
 
-        try {
-            flowEngine.execute(flowInstance, state.getRequest(), transmitMap);
-        } catch (Exception e) {
-            if (stopSignal.get() || Thread.currentThread().isInterrupted()) {
-                // Cancellation is a resumable pause, including cancellation during planning/network I/O.
+            try {
+                flowEngine.execute(flowInstance, state.getRequest(), transmitMap);
+            } catch (Exception e) {
+                if (stopSignal.get() || Thread.currentThread().isInterrupted()) {
+                    // Cancellation is a resumable pause, including cancellation during planning/network I/O.
+                    Thread.interrupted();
+                    state.setStatus(TaskStatus.PAUSED);
+                    state.setTerminationReason("USER_INTERRUPTED");
+                    taskStore.save(state);
+                } else if ("MODEL_CALL_LIMIT".equals(state.getTerminationReason())) {
+                    state.setStatus(TaskStatus.TIMEOUT);
+                    taskStore.save(state);
+                } else {
+                    state.setTerminationReason("FRAMEWORK_ERROR");
+                    log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
+                    state.setStatus(TaskStatus.FAILED);
+                    taskStore.save(state);
+                    eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                            EventType.AGENT_COMPLETED,
+                            "Status: " + state.getStatus() + " | " + e.getMessage()).inSpan(runSpan, null));
+                    this.activeStopSignal = null;
+                    throw e;
+                }
+            }
+            if (stopSignal.get()) {
                 Thread.interrupted();
                 state.setStatus(TaskStatus.PAUSED);
+                state.setTerminationReason("USER_INTERRUPTED");
                 taskStore.save(state);
-            } else {
-                log.error("RegnexeAgent loop failed: {}", e.getMessage(), e);
-                state.setStatus(TaskStatus.FAILED);
-                taskStore.save(state);
-                eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
-                        EventType.AGENT_COMPLETED,
-                        "Status: " + state.getStatus() + " | " + e.getMessage()).inSpan(runSpan, null));
-                this.activeStopSignal = null;
-                throw e;
             }
-        }
-        if (stopSignal.get()) {
-            Thread.interrupted();
-            state.setStatus(TaskStatus.PAUSED);
+
+            if (state.getStatus() == TaskStatus.RUNNING) {
+                state.setStatus(TaskStatus.TIMEOUT);
+                state.setTerminationReason("ROUND_LIMIT");
+                taskStore.save(state);
+            }
+
+            this.activeStopSignal = null;
+
+            List<RoundRecord> rounds = state.getRounds();
+            ReflectionDecision lastDecision = (rounds == null || rounds.isEmpty())
+                    ? null
+                    : rounds.get(rounds.size() - 1).getReflection();
+            String finalText = state.getStatus() == TaskStatus.PAUSED
+                    ? (state.getLastToolResult() != null ? state.getLastToolResult() : "Task interrupted by user.")
+                    : resultComposer.compose(state, lastDecision);
+
+            // FINISHED/ESCALATED were the only statuses that used to leave a conversation_turns
+            // trace — FAILED and TIMEOUT are just as settled (the loop won't advance this task any
+            // further on its own) and deserve the same visibility in /history, not silence. A task
+            // still RUNNING here (interrupted by a hard kill, not caught by any of this method's own
+            // exception handling) is deliberately excluded — it's not settled, and /resume's
+            // listResumable() already surfaces it with real round-by-round detail; /history isn't
+            // the right place to guess at an unresolved task's content.
+            if (state.getStatus() == TaskStatus.FINISHED || state.getStatus() == TaskStatus.ESCALATED
+                    || state.getStatus() == TaskStatus.FAILED || state.getStatus() == TaskStatus.TIMEOUT) {
+                String displayGoal = state.getRequest().getDisplayGoal();
+                String humanTurn = (displayGoal != null && !displayGoal.isBlank())
+                        ? displayGoal : state.getRequest().getGoal();
+                try {
+                    storeSessionRound(state.getSessionId(), humanTurn, finalText);
+                } catch (org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.LimitExceeded e) {
+                    state.setStatus(TaskStatus.TIMEOUT);
+                }
+            }
+
+            eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
+                    EventType.AGENT_COMPLETED,
+                    "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()
+                    + " | Reason: " + state.getTerminationReason() + " | Model attempts: " + state.getModelCallAttempts()).inSpan(runSpan, null));
+
             taskStore.save(state);
+            return AgentResult.builder()
+                    .taskId(state.getTaskId())
+                    .status(state.getStatus())
+                    .finalText(finalText)
+                    .state(state)
+                    .build();
         }
-
-        if (state.getStatus() == TaskStatus.RUNNING) {
-            state.setStatus(TaskStatus.TIMEOUT);
-            taskStore.save(state);
-        }
-
-        this.activeStopSignal = null;
-
-        List<RoundRecord> rounds = state.getRounds();
-        ReflectionDecision lastDecision = (rounds == null || rounds.isEmpty())
-                ? null
-                : rounds.get(rounds.size() - 1).getReflection();
-        String finalText = state.getStatus() == TaskStatus.PAUSED
-                ? (state.getLastToolResult() != null ? state.getLastToolResult() : "Task interrupted by user.")
-                : resultComposer.compose(state, lastDecision);
-
-        // FINISHED/ESCALATED were the only statuses that used to leave a conversation_turns
-        // trace — FAILED and TIMEOUT are just as settled (the loop won't advance this task any
-        // further on its own) and deserve the same visibility in /history, not silence. A task
-        // still RUNNING here (interrupted by a hard kill, not caught by any of this method's own
-        // exception handling) is deliberately excluded — it's not settled, and /resume's
-        // listResumable() already surfaces it with real round-by-round detail; /history isn't
-        // the right place to guess at an unresolved task's content.
-        if (state.getStatus() == TaskStatus.FINISHED || state.getStatus() == TaskStatus.ESCALATED
-                || state.getStatus() == TaskStatus.FAILED || state.getStatus() == TaskStatus.TIMEOUT) {
-            String displayGoal = state.getRequest().getDisplayGoal();
-            String humanTurn = (displayGoal != null && !displayGoal.isBlank())
-                    ? displayGoal : state.getRequest().getGoal();
-            storeSessionRound(state.getSessionId(), humanTurn, finalText);
-        }
-
-        eventListener.dispatch(AgentEvent.of(state.getTaskId(), state.getCurrentRound(),
-                EventType.AGENT_COMPLETED,
-                "Status: " + state.getStatus() + " | Rounds: " + state.getCurrentRound()).inSpan(runSpan, null));
-
-        return AgentResult.builder()
-                .taskId(state.getTaskId())
-                .status(state.getStatus())
-                .finalText(finalText)
-                .state(state)
-                .build();
     }
 
     private Map<String, Object> buildTransmitMap(TaskExecutionState state,
@@ -466,7 +491,8 @@ public class RegnexeAgent {
                     .appId("0").userId("0").sessionId(sessionId)
                     .maxSize(sessionCompactPeriod)
                     .storage(sessionStorage)
-                    .llm(llmProvider.provide(defaultModel))
+                    .llm(org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.wrap(llmProvider.provide(defaultModel),
+                            org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.currentTask(), "summary"))
                     .build();
         }
         HistoryInfos turn = HistoryInfos.builder()
@@ -480,7 +506,8 @@ public class RegnexeAgent {
     }
 
     private String compressForSession(String text, int targetChars) {
-        BaseChatModel llm = llmProvider.provide(defaultModel);
+        BaseChatModel llm = org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.wrap(llmProvider.provide(defaultModel),
+                org.salt.regnexe.agent.core.task.worker.BudgetedChatModel.currentTask(), "summary");
         return TextCompressor.compress(text, targetChars, chainActor, llm);
     }
 }

@@ -107,7 +107,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         if (state.getRequest().getRequiredSkillId() != null) {
             selectedCapIds = List.of(state.getRequest().getRequiredSkillId());
         }
-        BaseChatModel llm = llmProvider.provide(modelSpec);
+        BaseChatModel llm = BudgetedChatModel.wrap(llmProvider.provide(modelSpec), state, "execute");
 
         int round = state.getCurrentRound();
         String taskId = state.getTaskId();
@@ -129,7 +129,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         java.nio.file.Path claudeCompatWorkspace = bus.getTransmit(ContextBusKeys.CLAUDE_COMPAT_WORKSPACE);
         String phaseSpan = SpanIds.next();
         LoopSpans spans = new LoopSpans(() -> phaseSpan);
-        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skillSystemPrompts,
+        resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, spec -> BudgetedChatModel.wrap(llmProvider.provide(spec), state, "subagent"), mcpTools, skillSystemPrompts,
                 subAgents, maxAgentIterations, maxConsecutiveToolFailures, listener, spans, taskId, round, verbose,
                 toolExecutions, typeByName, claudeCompatWorkspace, baseToolNames,
                 state.getRequest().getRequiredSkillId() != null);
@@ -174,6 +174,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                             formatToolResult(label, obs))));
                 })
                 .onTokenUsage(u -> listener.dispatch(spans.llmFollowUp(AgentEvent.ofTokenUsage(taskId, round, u))));
+        if (state.getRequest().getExecutionBudget() != null
+                && !state.getRequest().getExecutionBudget().isRetryExecution()) executorBuilder.toolRetry(0);
         if (maxAgentIterations != null) {
             executorBuilder.maxIterations(maxAgentIterations);
         }
@@ -230,6 +232,9 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                 } catch (AgentStoppedException | AgentAbortException e) {
                     throw e;
                 } catch (Exception e) {
+                    BudgetedChatModel.rethrowLimit(state);
+                    if (state.getRequest().getExecutionBudget() != null
+                            && !state.getRequest().getExecutionBudget().isRetryExecution()) throw e;
                     if (attempt >= MAX_EXECUTE_RETRIES) throw e;
                     log.warn("Round {}: execute call failed on attempt {}/{}, retrying: {}",
                             round, attempt + 1, MAX_EXECUTE_RETRIES + 1, e.getMessage());
@@ -241,25 +246,45 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
                     "SUCCESS | " + executionText).inSpan(phaseSpan, null));
             log.debug("Round {}: execution succeeded", state.getCurrentRound());
+        } catch (BudgetedChatModel.LimitExceeded e) {
+            output.setFinalText("Task model call limit reached.");
+            output.setStatus(ExecutionStatus.FAILED);
+            state.setStatus(TaskStatus.TIMEOUT);
+            listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
+                    "FAILED | MODEL_CALL_LIMIT").inSpan(phaseSpan, null));
         } catch (AgentStoppedException e) {
             output.setFinalText(state.getLastToolResult() != null
                     ? state.getLastToolResult() : "Paused before any tool result was produced.");
             output.setStatus(ExecutionStatus.STOPPED);
             state.setStatus(TaskStatus.PAUSED);
+            state.setTerminationReason("USER_INTERRUPTED");
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED, "PAUSED").inSpan(phaseSpan, null));
             log.debug("Round {}: execution paused", state.getCurrentRound());
         } catch (AgentAbortException e) {
+            String reason = switch (e.getReason()) {
+                case MAX_STEPS -> "ITERATION_LIMIT";
+                case TIMEOUT -> "EXECUTOR_TIMEOUT";
+                case CONSECUTIVE_TOOL_FAILURES -> "TOOL_FAILURE_LIMIT";
+                default -> "EXECUTOR_ABORT";
+            };
+            if (state.getRequest().getExecutionBudget() != null) {
+                state.setTerminationReason(reason);
+                state.setStatus("TOOL_FAILURE_LIMIT".equals(reason) ? TaskStatus.FAILED : TaskStatus.TIMEOUT);
+            }
             output.setStatus(ExecutionStatus.FAILED);
             // finalText is a short, honest marker, not a reconstruction of what happened — the
             // round's real tool-call detail already lives in this round's ExecutionOutput.toolExecutions
             // (and the shared ctx persisted below). The full e.getMessage() still reaches the live
             // event log two lines below, for a human watching in real time.
-            output.setFinalText("Round " + round + " incomplete: iteration budget ("
-                    + (maxAgentIterations != null ? maxAgentIterations : "?") + " steps) exceeded.");
+            output.setFinalText("Round " + round + " incomplete: " + reason + " (applied iterations: "
+                    + maxAgentIterations + ").");
             listener.dispatch(AgentEvent.of(taskId, round, EventType.EXECUTION_COMPLETED,
                     "FAILED | " + e.getMessage()).inSpan(phaseSpan, null));
             log.warn("Round {}: execution aborted: {}", state.getCurrentRound(), e.getMessage());
         } catch (Exception e) {
+            if (state.getRequest().getExecutionBudget() != null) {
+                state.setTerminationReason("MODEL_ERROR"); state.setStatus(TaskStatus.FAILED);
+            }
             output.setStatus(ExecutionStatus.FAILED);
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName() + " (no message)";
             output.setFinalText(msg);
@@ -593,6 +618,11 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         record.setToolCall(toolCallLabel);
         record.setArguments(extractToolArguments(rawToolCall));
         record.setObservation(observation);
+        String text = observation == null ? "" : observation.trim();
+        record.setOutcome(text.startsWith("Error: timed out") ? "TOOL_TIMEOUT"
+                : text.matches("(?s)^Exit: [1-9][0-9]*\\b.*") ? "TOOL_NONZERO_EXIT"
+                : text.startsWith("Error:") || text.startsWith("Tool execution error:") ? "TOOL_ERROR"
+                : text.startsWith("Exit: 0") ? "SUCCESS" : "UNKNOWN");
         record.setTimestamp(System.currentTimeMillis());
         records.add(record);
     }

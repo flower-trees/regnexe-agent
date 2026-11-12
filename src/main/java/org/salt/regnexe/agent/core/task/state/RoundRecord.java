@@ -28,6 +28,10 @@ import org.salt.regnexe.agent.core.task.state.reflection.ReflectionDecision;
 @Data
 public class RoundRecord {
 
+    private Integer appliedMaxIterations;
+
+    private int executorModelCalls;
+
     private int roundNumber;
 
     /**

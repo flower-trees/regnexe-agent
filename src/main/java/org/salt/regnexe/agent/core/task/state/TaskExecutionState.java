@@ -44,6 +44,12 @@ public class TaskExecutionState {
 
     private TaskStatus status;
 
+    /** Terminal diagnostic; null on normal success. Tool outcomes are recorded separately. */
+    private String terminationReason;
+
+    /** Attempted synchronous model calls by phase, accumulated across resume. */
+    private Map<String, Integer> modelCallAttempts;
+
     private int currentRound;
 
     private long updatedAt;

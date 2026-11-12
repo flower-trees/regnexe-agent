@@ -173,6 +173,7 @@
                 <include>**/LoopSpansTest.java</include>
                 <include>**/TaskResumeSafetyTest.java</include>
                 <include>**/RequiredSkillExecutionTest.java</include>
+                <include>**/TaskBudgetTest.java</include>
                 <include>**/CompositeEventListenerTest.java</include>
                 <include>**/SimpleMarketplaceTest.java</include>
                 <include>**/PluginCacheInstallerTest.java</include>

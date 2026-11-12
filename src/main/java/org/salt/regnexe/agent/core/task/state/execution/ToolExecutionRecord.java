@@ -32,5 +32,8 @@ public class ToolExecutionRecord {
 
     private String observation;
 
+    /** Tool protocol diagnostic; UNKNOWN never implies success. */
+    private String outcome;
+
     private long timestamp;
 }

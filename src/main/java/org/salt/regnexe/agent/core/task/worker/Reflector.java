@@ -133,7 +133,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         }
 
         // withJsonMode(): ReflectionDecision is parsed as structured JSON.
-        BaseChatModel llm = llmProvider.provide(modelSpec).withJsonMode();
+        BaseChatModel llm = BudgetedChatModel.wrap(llmProvider.provide(modelSpec), state, "reflect").withJsonMode();
         String taskId = state.getTaskId();
         int roundNum = state.getCurrentRound();
         String phaseSpan = SpanIds.next();
@@ -176,6 +176,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
                     raw = callResult.getText();
                     lastError = null;
                 } catch (Exception e) {
+                    BudgetedChatModel.rethrowLimit(state);
                     lastError = e;
                     log.warn("Round {}: reflect call failed on attempt {}/{}: {}",
                             roundNum, attempt + 1, MAX_REFLECT_RETRIES + 1, e.getMessage());
@@ -208,7 +209,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
 
         switch (decision.getAction()) {
             case FINISH   -> state.setStatus(TaskStatus.FINISHED);
-            case ESCALATE -> state.setStatus(TaskStatus.ESCALATED);
+            case ESCALATE -> { state.setStatus(TaskStatus.ESCALATED); state.setTerminationReason("INCOMPLETE"); }
             case CONTINUE -> {} // remain RUNNING
         }
         state.setUpdatedAt(System.currentTimeMillis());

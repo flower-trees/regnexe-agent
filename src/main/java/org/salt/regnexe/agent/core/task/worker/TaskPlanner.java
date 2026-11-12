@@ -195,7 +195,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             // withJsonMode(): Plan output is parsed as structured JSON (PlanOutput), so ask the
             // vendor to constrain generation to valid JSON syntax where supported. This does NOT
             // affect Execute — CapabilityExecutor provides its own llm instance for tool-calling.
-            BaseChatModel llm = llmProvider.provide(modelSpec).withJsonMode();
+            BaseChatModel llm = BudgetedChatModel.wrap(llmProvider.provide(modelSpec), state, "plan").withJsonMode();
             FlowInstance flow = buildFlow(chainActor, llm,
                     text -> listener.dispatch(spans.llmStarted(
                             AgentEvent.of(taskId, round, EventType.PLAN_LLM_RESPONDED, text))));
@@ -216,6 +216,7 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                     LlmCallReporter.report(listener, spans, taskId, round, "plan", callResult, callStartedAt);
                     gen = callResult.getText();
                 } catch (Exception e) {
+                    BudgetedChatModel.rethrowLimit(state);
                     log.warn("Round {}: plan call failed on attempt {}/{}: {}",
                             round, attempt + 1, MAX_PLAN_RETRIES + 1, e.getMessage());
                     continue;
@@ -295,6 +296,14 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             // silently keeping whatever a previous round's override left behind.
             bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS, defaultIterations);
         }
+
+        var budget = state.getRequest().getExecutionBudget();
+        if (budget != null && budget.getHardMaxIterations() > 0) {
+            Integer suggested = bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS);
+            bus.putTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS,
+                    Math.min(suggested == null ? defaultIterations : suggested, budget.getHardMaxIterations()));
+        }
+        RoundRecords.current(state).setAppliedMaxIterations(bus.getTransmit(ContextBusKeys.MAX_AGENT_ITERATIONS));
 
         RoundRecords.current(state).setPlan(plan);
         state.setUpdatedAt(System.currentTimeMillis());

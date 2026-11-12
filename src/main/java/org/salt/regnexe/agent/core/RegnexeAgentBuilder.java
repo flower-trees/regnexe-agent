@@ -217,6 +217,8 @@ public class RegnexeAgentBuilder {
         private Marketplace marketplace;
         private TaskStore taskStore;
         private ResultComposer resultComposer;
+        private org.salt.regnexe.agent.core.task.state.ExecutionBudget executionBudget;
+
         private int maxRounds = DEFAULT_MAX_ROUNDS;
         private final List<AgentEventListener> eventListeners = new ArrayList<>();
         private ConversationStorage sessionStorage;
@@ -612,6 +614,12 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /** Opt-in per-task evaluation caps; existing defaults are unchanged when absent. */
+        public Builder withExecutionBudget(org.salt.regnexe.agent.core.task.state.ExecutionBudget budget) {
+            this.executionBudget = budget == null ? null : budget.snapshot();
+            return this;
+        }
+
         public RegnexeAgent build() {
             ModelProvider baseProvider = llmProvider != null ? llmProvider : new DefaultModelProvider();
             // withDefaultModel(BaseChatModel) stores a direct LLM for the "_direct_" spec.
@@ -650,7 +658,8 @@ public class RegnexeAgentBuilder {
                     sessionMemory,
                     claudeCompatWorkspace,
                     projectMemory,
-                    baseToolNames
+                    baseToolNames,
+                    executionBudget
             );
         }
     }
