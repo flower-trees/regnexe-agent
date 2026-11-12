@@ -148,7 +148,7 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
 
         // Pre-LLM guard: catch structurally incomplete rounds before the LLM can hallucinate completion.
         RoundRecord roundRecord = RoundRecords.current(state);
-        ReflectionDecision decision = evaluateGuardRules(roundRecord, state);
+        ReflectionDecision decision = evaluateGuardRules(roundRecord, state, bus.getTransmit(ContextBusKeys.MARKETPLACE));
         if (decision != null) {
             log.warn("Round {}: guard rule forced {} — {}", roundNum, decision.getAction(), decision.getReason());
         } else {
@@ -282,7 +282,8 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
      * answering from an earlier round's already-gathered data without making any new calls is
      * expected, not a sign anything went wrong — only flag it when nothing was ever actually run.
      */
-    private ReflectionDecision evaluateGuardRules(RoundRecord round, TaskExecutionState state) {
+    private ReflectionDecision evaluateGuardRules(RoundRecord round, TaskExecutionState state,
+            org.salt.regnexe.agent.core.marketplace.Marketplace marketplace) {
         PlanOutput plan = round.getPlan();
 
         boolean capsSelected = plan != null
@@ -291,7 +292,13 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         boolean noToolsRan = toolExecutionsForRound(round).isEmpty();
         boolean hasPriorEvidence = state.getPriorSteps() != null && !state.getPriorSteps().isEmpty();
 
-        if (capsSelected && noToolsRan && !hasPriorEvidence) {
+        // Skills contribute instructions to the shared loop; they are not tool calls.
+        // Keep the no-call guard for real tools/sub-agents and unresolved capabilities.
+        boolean requiresCall = capsSelected && plan.getSelectedCapabilityIds().stream().anyMatch(id -> {
+            var cap = marketplace == null ? null : marketplace.resolveDescriptor(id);
+            return cap == null || cap.getType() != org.salt.regnexe.agent.core.marketplace.capability.CapabilityType.SKILL;
+        });
+        if (requiresCall && noToolsRan && !hasPriorEvidence) {
             int capsCount = plan.getSelectedCapabilityIds().size();
             ReflectionDecision decision = new ReflectionDecision();
             decision.setAction(ReflectionAction.CONTINUE);

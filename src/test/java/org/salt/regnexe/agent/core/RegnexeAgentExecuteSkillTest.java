@@ -42,8 +42,8 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Covers {@link RegnexeAgent#executeSkill} — direct skill invocation bypassing
- * Search/Plan/Reflect.
+ * Covers {@link RegnexeAgent#executeSkill} — explicit Skill invocation through the shared
+ * Search/Plan/Execute/Reflect task loop.
  *
  * <p>Tests 1–2 are pure validation (no LLM call). Tests 3–4 run a real Skill against a live
  * model (needs DEEPSEEK_KEY, same prerequisite as Example05PluginLoadingTest's
@@ -131,7 +131,7 @@ public class RegnexeAgentExecuteSkillTest {
             Assert.assertEquals(TaskStatus.FINISHED, result.getStatus());
             Assert.assertNotNull(result.getFinalText());
             Assert.assertFalse(result.getFinalText().isBlank());
-            Assert.assertNull("executeSkill does not build a TaskExecutionState", result.getState());
+            Assert.assertNotNull("executeSkill persists the shared task state", result.getState());
 
             Assert.assertEquals(EventType.AGENT_STARTED, observedTypes.get(0));
             Assert.assertEquals(EventType.AGENT_COMPLETED, observedTypes.get(observedTypes.size() - 1));

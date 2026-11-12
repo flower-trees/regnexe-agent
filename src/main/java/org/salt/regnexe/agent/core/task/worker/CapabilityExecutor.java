@@ -103,6 +103,10 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         Set<String> baseToolNames = bus.getTransmit(ContextBusKeys.BASE_TOOL_NAMES);
         if (baseToolNames == null) baseToolNames = Set.of();
 
+        RequiredSkillPolicy.validate(state.getRequest(), marketplace);
+        if (state.getRequest().getRequiredSkillId() != null) {
+            selectedCapIds = List.of(state.getRequest().getRequiredSkillId());
+        }
         BaseChatModel llm = llmProvider.provide(modelSpec);
 
         int round = state.getCurrentRound();
@@ -127,7 +131,8 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
         LoopSpans spans = new LoopSpans(() -> phaseSpan);
         resolveCapabilities(marketplace, selectedCapIds, chainActor, llm, llmProvider, mcpTools, skillSystemPrompts,
                 subAgents, maxAgentIterations, maxConsecutiveToolFailures, listener, spans, taskId, round, verbose,
-                toolExecutions, typeByName, claudeCompatWorkspace, baseToolNames);
+                toolExecutions, typeByName, claudeCompatWorkspace, baseToolNames,
+                state.getRequest().getRequiredSkillId() != null);
 
         // Always available, independent of the plan's selected capabilities — a self-maintained
         // checklist the executor can optionally use for a multi-step round, the same way Claude
@@ -345,7 +350,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                                      List<ToolExecutionRecord> toolExecutions,
                                      Map<String, CapabilityType> typeByName,
                                      java.nio.file.Path claudeCompatWorkspace,
-                                     Set<String> baseToolNames) {
+                                     Set<String> baseToolNames, boolean requiredSkillOnly) {
         if (marketplace == null || capIds == null) return;
 
         // Tool names already present in mcpTools, so later additions don't register a name twice.
@@ -395,7 +400,7 @@ public class CapabilityExecutor extends FlowNode<Object, Object> implements Work
                         // its own allowedTools declaration.
                         skillGrantedToolNames.addAll(baseToolNames);
                         List<String> declaredAllowed = skillConfig.getAllowedTools();
-                        if (declaredAllowed != null && !declaredAllowed.isEmpty()) {
+                        if (!requiredSkillOnly && declaredAllowed != null && !declaredAllowed.isEmpty()) {
                             // Extra named tools this skill needs beyond the base set — resolved by
                             // name below, same mechanism as baseToolNames.
                             skillGrantedToolNames.addAll(declaredAllowed);

@@ -29,6 +29,9 @@ public class TaskRequest {
      */
     private String goal;
 
+    /** Optional single Skill constraint; persisted across rounds, pause and resume. */
+    private String requiredSkillId;
+
     /**
      * Structured inputs attached to the task
      */

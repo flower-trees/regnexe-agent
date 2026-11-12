@@ -51,7 +51,7 @@ import org.salt.jlangchain.core.history.storage.ConversationStorage;
 import org.salt.jlangchain.core.llm.BaseChatModel;
 import org.salt.jlangchain.core.message.BaseMessage;
 import org.salt.jlangchain.core.message.MessageType;
-import org.salt.jlangchain.core.skill.Skill;
+import org.salt.regnexe.agent.core.task.worker.RequiredSkillPolicy;
 import org.salt.jlangchain.rag.tools.Tool;
 
 import java.nio.file.Path;
@@ -178,6 +178,7 @@ public class RegnexeAgent {
     }
 
     public AgentResult execute(TaskRequest request) {
+        RequiredSkillPolicy.validate(request, marketplace);
         TaskExecutionState state = initState(request);
         taskStore.save(state);
 
@@ -224,6 +225,7 @@ public class RegnexeAgent {
         if (state.getStatus() == TaskStatus.FINISHED) {
             throw new IllegalStateException("Task is already finished: " + taskId);
         }
+        RequiredSkillPolicy.validate(state.getRequest(), marketplace);
         if (supplementInput != null && !supplementInput.isBlank()) {
             String goal = state.getRequest().getGoal();
             state.getRequest().setGoal((goal == null || goal.isBlank() ? "" : goal + "\n\n")
@@ -267,128 +269,20 @@ public class RegnexeAgent {
     }
 
     /**
-     * Directly invoke a SKILL capability by id, bypassing Search/Plan/Reflect.
-     * Used for explicit user-triggered invocation (e.g. CLI "/skill-name args"), as opposed to
-     * the planner autonomously selecting the skill during {@link #execute}.
-     *
-     * <p>Does not create a {@link TaskExecutionState} or touch {@code taskStore} — a skill run
-     * cannot be paused via {@link #pause()}. Events still flow through
-     * the same {@link #eventListener} used by execute(), so a caller's event rendering
-     * (including the {@code TASK_TOKEN_SUMMARY} that {@code TokenAggregatingEventListener} emits
-     * before {@code AGENT_COMPLETED}) needs no special-casing.
-     *
-     * @param capabilityId capability id as registered in the marketplace (format:
-     *                      {@code <pluginId>.<skillName>})
-     * @param args          raw argument text passed to the skill's internal executor as the user turn
-     * @param sessionId     session to store the resulting turn under; null skips session-history storage
-     * @param displayGoal   human-readable form for session history (e.g. "/review src/Foo.java");
-     *                      falls back to "/<capabilityId> <args>" when null/blank
+     * Execute one explicitly selected Skill through the normal persisted task loop.
+     * The signature and display goal remain compatible with slash-command callers.
      */
     public AgentResult executeSkill(String capabilityId, String args, String sessionId, String displayGoal) {
-        CapabilityDescriptor cap = marketplace.resolveDescriptor(capabilityId);
-        if (cap == null) {
+        if (capabilityId == null || capabilityId.isBlank()) {
             throw new IllegalArgumentException("Unknown skill: " + capabilityId);
         }
-        if (cap.getType() != CapabilityType.SKILL || cap.getSkillConfig() == null) {
-            throw new IllegalArgumentException("Not a skill capability: " + capabilityId);
-        }
-
-        String taskId = UUID.randomUUID().toString();
-        BaseChatModel llm = llmProvider.provide(defaultModel);
-
-        String runSpan = SpanIds.rootSpanId(taskId);
-        LoopSpans spans = new LoopSpans(() -> runSpan);
-        eventListener.dispatch(AgentEvent.of(taskId, 0, EventType.AGENT_STARTED,
-                "Skill: " + capabilityId + " | args: " + args).inSpan(runSpan, null));
-
-        Skill.Builder skillBuilder = Skill.from(cap.getSkillConfig(), chainActor).llm(llm);
-        // executeSkill() otherwise falls back to j-langchain Skill.Builder's own
-        // DEFAULT_MAX_ITERATIONS (10) — a hardcoded budget the CLI's agent.max_agent_iterations
-        // config has never reached. Confirmed for real: robot-article-writing's actual workflow
-        // (query schema, read news-sources.md, cross-check existing articles, research, draft,
-        // upload images, dry-run, commit) burned all 10 just on setup/orientation and got cut
-        // off with "Max iterations (10) reached" before doing any real work. Only apply our
-        // configured budget when the skill's own SKILL.md hasn't deliberately declared a
-        // tighter/looser one — respect explicit skill-author intent over the CLI default.
-        if (cap.getSkillConfig().getMaxIterations() == null) {
-            skillBuilder.maxIterations(maxAgentIterations);
-        }
-        // Resolve the same baseToolNames the Planner-driven path (CapabilityExecutor's SKILL
-        // branch) unconditionally grants every selected skill — see that class's javadoc: "a
-        // Skill shares the main agent's full tool access because it runs in the same context".
-        // Without this, /skill-name direct invocation was the ONE path that did NOT share it:
-        // Skill.from(...) builds a standalone Skill with no parentTools injected, so a skill
-        // whose job requires touching real project files (not just its own .rex/ tree) had no
-        // way to reach them — confirmed for real against robot-article-writing, whose lib/db.py
-        // and lib/upload.py live at the project root, one level above the claudeCompatWorkspace
-        // sandbox: file_exists/list_directory calls for anything outside it threw
-        // "SecurityException: Path escapes workspace", and the LLM had no fallback but to
-        // (incorrectly) write article payloads into the sandbox instead of the real DB.
-        List<Tool> baseTools = baseToolNames.stream()
-                .map(marketplace::resolveDescriptor)
-                .filter(java.util.Objects::nonNull)
-                .map(CapabilityDescriptor::getTool)
-                .filter(java.util.Objects::nonNull)
-                .toList();
-        if (!baseTools.isEmpty()) {
-            // Real tool access supersedes the claudeCompatMode sandbox for this skill: leaving
-            // both active would register two tools named "bash"/"read_file" (SkillWorkspaceTools
-            // uses the same names as FileTools/BashTool), which is at best redundant and at worst
-            // lets the model reach for the sandboxed one when the real one was intended.
-            skillBuilder.claudeCompatMode(false);
-        } else if (claudeCompatWorkspace != null) {
-            skillBuilder.claudeCompatWorkspace(claudeCompatWorkspace);
-        }
-        if (verbose) {
-            skillBuilder.verbose(true);
-        } else {
-            String scope = "[skill:" + cap.getName() + "]";
-            skillBuilder.onLlm(text -> eventListener.dispatch(spans.llmStarted(
-                    AgentEvent.of(taskId, 0, EventType.SKILL_LLM_RESPONDED, scope + " " + text))));
-            skillBuilder.onToolCall(tc -> eventListener.dispatch(spans.toolCalled(
-                    AgentEvent.of(taskId, 0, EventType.TOOL_CALLED, scope + " " + tc))));
-            skillBuilder.onObservation(obs -> eventListener.dispatch(spans.toolResult(
-                    AgentEvent.of(taskId, 0, EventType.TOOL_RESULT, scope + " " + obs))));
-        }
-        skillBuilder.onTokenUsage(u -> eventListener.dispatch(spans.llmFollowUp(
-                AgentEvent.ofCapabilityTokenUsage(taskId, 0, cap.getName(), u))));
-
-        String finalText;
-        TaskStatus status;
-        try {
-            Skill skill = skillBuilder.build();
-            if (!baseTools.isEmpty()) {
-                skill.injectParentTools(baseTools);
-            }
-            finalText = skill.invoke(args == null ? "" : args);
-            status = TaskStatus.FINISHED;
-        } catch (Exception e) {
-            log.warn("executeSkill '{}' failed: {}", capabilityId, e.getMessage());
-            finalText = "Skill execution failed: " + e.getMessage();
-            boolean interrupted = Thread.currentThread().isInterrupted();
-            Throwable cause = e;
-            while (cause != null) {
-                interrupted |= cause instanceof org.salt.jlangchain.core.agent.AgentStoppedException;
-                cause = cause.getCause();
-            }
-            status = interrupted ? TaskStatus.PAUSED : TaskStatus.FAILED;
-            if (interrupted) { Thread.interrupted(); finalText = "Skill interrupted by user."; }
-        }
-
-        if (sessionId != null && status == TaskStatus.FINISHED) {
-            String humanTurn = (displayGoal != null && !displayGoal.isBlank())
-                    ? displayGoal : ("/" + capabilityId + " " + (args == null ? "" : args)).trim();
-            storeSessionRound(sessionId, humanTurn, finalText);
-        }
-
-        eventListener.dispatch(AgentEvent.of(taskId, 0, EventType.AGENT_COMPLETED,
-                "Status: " + status + " | Skill: " + capabilityId).inSpan(runSpan, null));
-
-        return AgentResult.builder()
-                .taskId(taskId)
-                .status(status)
-                .finalText(finalText)
-                .build();
+        TaskRequest request = new TaskRequest();
+        request.setGoal(args == null ? "" : args);
+        request.setRequiredSkillId(capabilityId);
+        request.setSessionId(sessionId);
+        request.setDisplayGoal(displayGoal != null && !displayGoal.isBlank()
+                ? displayGoal : ("/" + capabilityId + " " + (args == null ? "" : args)).trim());
+        return execute(request);
     }
 
     // ── Loop ─────────────────────────────────────────────────────────────────

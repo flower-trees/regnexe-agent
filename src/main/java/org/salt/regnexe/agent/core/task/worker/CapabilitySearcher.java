@@ -66,7 +66,7 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
         state.getRounds().add(round);
 
         ReflectionHint lastHint = lastHint(state);
-        boolean shouldSearch = roundNumber == 1
+        boolean shouldSearch = state.getRequest().getRequiredSkillId() != null || roundNumber == 1
                 || (lastHint != null && lastHint.isRequestResearch());
 
         if (shouldSearch && marketplace != null) {
@@ -83,7 +83,15 @@ public class CapabilitySearcher extends FlowNode<Object, Object> implements Work
                     + (lastHint != null && lastHint.getSearchDirection() != null
                        ? " | hint: " + lastHint.getSearchDirection() : "")).inSpan(phaseSpan, runSpan));
 
-            CapabilitySearchResult result = marketplace.search(query);
+            CapabilitySearchResult result;
+            if (state.getRequest().getRequiredSkillId() != null) {
+                result = new CapabilitySearchResult();
+                result.setCandidates(RequiredSkillPolicy.candidates(state.getRequest(), marketplace));
+                result.setSearchStrategy("required_skill");
+                result.setSearchedAt(System.currentTimeMillis());
+            } else {
+                result = marketplace.search(query);
+            }
 
             if (state.getSearchResults() == null) {
                 state.setSearchResults(new ArrayList<>());

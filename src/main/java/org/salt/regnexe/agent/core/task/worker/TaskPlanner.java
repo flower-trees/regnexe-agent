@@ -256,8 +256,12 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
                 plan = recoverPlan(state, candidates, lastRaw);
             }
             normalizePlan(plan);
-            expandSelectedAllowedTools(plan, candidates);
+            if (state.getRequest().getRequiredSkillId() == null) {
+                expandSelectedAllowedTools(plan, candidates);
+            }
         }
+
+        RequiredSkillPolicy.enforcePlan(state.getRequest(), plan);
 
         // Append session history to narrative so the executor LLM sees conversation
         // context directly, regardless of whether the planner LLM was called.
@@ -349,6 +353,10 @@ public class TaskPlanner extends FlowNode<Object, Object> implements Worker {
             }
         }
 
+        if (state.getRequest().getRequiredSkillId() != null) {
+            systemSb.append("\n\nMandatory Skill: ").append(state.getRequest().getRequiredSkillId())
+                    .append(". Use exactly this Skill; do not substitute or add Skills/sub-agents. Only base tools are available.");
+        }
         systemSb.append("\n\nAvailable capabilities:\n");
         if (candidates != null) {
             candidates.forEach(c -> systemSb.append("- ").append(c.getCapabilityId())
