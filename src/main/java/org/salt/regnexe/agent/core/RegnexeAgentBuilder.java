@@ -50,11 +50,13 @@ import org.salt.regnexe.agent.core.marketplace.scope.ScopedEnabledState;
 import org.salt.regnexe.agent.core.task.DefaultResultComposer;
 import org.salt.regnexe.agent.core.task.ResultComposer;
 import org.salt.regnexe.agent.core.task.state.ExecutionBudget;
+import org.salt.regnexe.agent.core.task.state.OfflineTextReview;
 import org.salt.regnexe.agent.core.task.store.InMemoryTaskStore;
 import org.salt.regnexe.agent.core.task.store.TaskStore;
 import org.salt.regnexe.agent.core.task.worker.CapabilityExecutor;
 import org.salt.regnexe.agent.core.task.worker.CapabilitySearcher;
 import org.salt.regnexe.agent.core.task.worker.Reflector;
+import org.salt.regnexe.agent.core.task.worker.FactualGrounding;
 import org.salt.regnexe.agent.core.task.worker.TaskPlanner;
 import org.springframework.stereotype.Component;
 
@@ -221,6 +223,8 @@ public class RegnexeAgentBuilder {
         private TaskStore taskStore;
         private ResultComposer resultComposer;
         private ExecutionBudget executionBudget;
+        private Map<String, Object> authoritativeFacts;
+        private OfflineTextReview offlineTextReview;
 
         private int maxRounds = DEFAULT_MAX_ROUNDS;
         private final List<AgentEventListener> eventListeners = new ArrayList<>();
@@ -623,6 +627,17 @@ public class RegnexeAgentBuilder {
             return this;
         }
 
+        /** Opt-in review source; affects Reflector only, not planning/execution prompts. */
+        public Builder withAuthoritativeFacts(Map<String, Object> facts) {
+            this.authoritativeFacts = FactualGrounding.snapshot(facts);
+            return this;
+        }
+
+        public Builder withOfflineTextReview(OfflineTextReview context) {
+            this.offlineTextReview = OfflineTextReview.snapshot(context);
+            return this;
+        }
+
         public RegnexeAgent build() {
             ModelProvider baseProvider = llmProvider != null ? llmProvider : new DefaultModelProvider();
             // withDefaultModel(BaseChatModel) stores a direct LLM for the "_direct_" spec.
@@ -662,7 +677,9 @@ public class RegnexeAgentBuilder {
                     claudeCompatWorkspace,
                     projectMemory,
                     baseToolNames,
-                    executionBudget
+                    executionBudget,
+                    authoritativeFacts,
+                    offlineTextReview
             );
         }
     }

@@ -49,6 +49,7 @@ import org.salt.regnexe.agent.core.marketplace.Marketplace;
 import org.salt.regnexe.agent.core.task.AgentResult;
 import org.salt.regnexe.agent.core.task.ResultComposer;
 import org.salt.regnexe.agent.core.task.state.ExecutionBudget;
+import org.salt.regnexe.agent.core.task.state.OfflineTextReview;
 import org.salt.regnexe.agent.core.task.state.RoundRecord;
 import org.salt.regnexe.agent.core.task.state.TaskExecutionState;
 import org.salt.regnexe.agent.core.task.state.TaskRequest;
@@ -59,6 +60,7 @@ import org.salt.regnexe.agent.core.task.worker.CapabilityExecutor;
 import org.salt.regnexe.agent.core.task.worker.CapabilitySearcher;
 import org.salt.regnexe.agent.core.task.worker.ContextBusKeys;
 import org.salt.regnexe.agent.core.task.worker.Reflector;
+import org.salt.regnexe.agent.core.task.worker.FactualGrounding;
 import org.salt.regnexe.agent.core.task.worker.RequiredSkillPolicy;
 import org.salt.regnexe.agent.core.task.worker.TaskPlanner;
 
@@ -96,6 +98,8 @@ public class RegnexeAgent {
     private final ResultComposer resultComposer;
     private final int maxRounds;
     private final ExecutionBudget executionBudget;
+    private final Map<String, Object> authoritativeFacts;
+    private final OfflineTextReview offlineTextReview;
     private final AgentEventListener eventListener;
     private final ConversationStorage sessionStorage;
     private final int sessionBufferSize;
@@ -140,8 +144,12 @@ public class RegnexeAgent {
                 Path claudeCompatWorkspace,
                 String projectMemory,
                 Set<String> baseToolNames,
-                ExecutionBudget executionBudget) {
+                ExecutionBudget executionBudget,
+                Map<String, Object> authoritativeFacts,
+                OfflineTextReview offlineTextReview) {
         this.executionBudget = executionBudget == null ? null : executionBudget.snapshot();
+        this.authoritativeFacts = FactualGrounding.snapshot(authoritativeFacts);
+        this.offlineTextReview = OfflineTextReview.snapshot(offlineTextReview);
         this.flowEngine = flowEngine;
         this.chainActor = chainActor;
         this.capabilitySearcher = capabilitySearcher;
@@ -182,6 +190,10 @@ public class RegnexeAgent {
     public AgentResult execute(TaskRequest request) {
         if (request.getExecutionBudget() == null && executionBudget != null) request.setExecutionBudget(executionBudget.snapshot());
         else if (request.getExecutionBudget() != null) request.setExecutionBudget(request.getExecutionBudget().snapshot());
+        request.setAuthoritativeFacts(FactualGrounding.snapshot(request.getAuthoritativeFacts() == null
+                ? authoritativeFacts : request.getAuthoritativeFacts()));
+        request.setOfflineTextReview(OfflineTextReview.snapshot(request.getOfflineTextReview() == null
+                ? offlineTextReview : request.getOfflineTextReview()));
         RequiredSkillPolicy.validate(request, marketplace);
         TaskExecutionState state = initState(request);
         taskStore.save(state);
@@ -345,7 +357,9 @@ public class RegnexeAgent {
 
             if (state.getStatus() == TaskStatus.RUNNING) {
                 state.setStatus(TaskStatus.TIMEOUT);
-                state.setTerminationReason("ROUND_LIMIT");
+                if (state.getTerminationReason() == null) {
+                    state.setTerminationReason("ROUND_LIMIT");
+                }
                 taskStore.save(state);
             }
 
