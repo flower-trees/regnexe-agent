@@ -27,8 +27,6 @@ public class ReflectionDecision {
 
     private String reason;
 
-    private GroundingReview groundingReview;
-
     /**
      * Guidance for the next round; null when action is FINISH or ESCALATE
      */

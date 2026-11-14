@@ -153,14 +153,9 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
         if (decision != null) {
             log.warn("Round {}: guard rule forced {} — {}", roundNum, decision.getAction(), decision.getReason());
         } else {
-            List<?> sessionHistory = bus.getTransmit(ContextBusKeys.SESSION_HISTORY);
-            boolean compact = CompactReflectionPrompt.eligible(state, roundRecord, execText, sessionHistory);
-            String userPrompt = compact ? CompactReflectionPrompt.userPrompt(state, execText)
-                    : buildPrompt(state, execText, roundRecord);
-            String systemPrompt = compact ? CompactReflectionPrompt.systemPrompt()
-                    : SYSTEM_PROMPT + FactualGrounding.instructions(state.getRequest().getAuthoritativeFacts());
+            String userPrompt = buildPrompt(state, execText, roundRecord);
             List<BaseMessage> messages = new ArrayList<>(List.of(
-                    BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), systemPrompt),
+                    BaseMessage.fromMessage(MessageType.SYSTEM.getCode(), SYSTEM_PROMPT),
                     BaseMessage.fromMessage(MessageType.HUMAN.getCode(), userPrompt)));
             // Same reasoning as TaskPlanner's plan-call retry, and same shared retry budget for
             // both failure modes: a transient call failure (proxy backend hiccup) has a real
@@ -210,7 +205,6 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
             }
         }
 
-        FactualGrounding.enforce(state, execText, decision);
         roundRecord.setReflection(decision);
         roundRecord.setEndedAt(System.currentTimeMillis());
 
@@ -281,7 +275,6 @@ public class Reflector extends FlowNode<Object, Object> implements Worker {
               .append(" of max ").append(state.getMaxRounds()).append(".\n");
         }
 
-        sb.append(FactualGrounding.prompt(state.getRequest().getAuthoritativeFacts(), execText));
         return sb.toString();
     }
 

@@ -33,11 +33,6 @@ public class TaskRequest {
 
     private ExecutionBudget executionBudget;
 
-    /** Optional positive facts for strict Reflector review; never inferred from the draft. */
-    private Map<String, Object> authoritativeFacts;
-
-    private OfflineTextReview offlineTextReview;
-
     /**
      * Structured inputs attached to the task
      */
